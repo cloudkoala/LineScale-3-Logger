@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LineScale 3 Logger</title>
+  <link rel="stylesheet" href="vendor/uPlot.min.css" />
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <h1>LineScale&nbsp;3 <span class="muted">Logger</span></h1>
+    <div class="topbar-right">
+      <span id="battery" class="pill pill-muted" hidden>🔋 <span id="batteryPct">–</span>%</span>
+      <div class="device-wrap">
+        <button id="status" class="pill pill-on device-pill" hidden></button>
+        <div id="deviceMenu" class="device-menu" hidden>
+          <button id="disconnectBtn" class="device-menu-item danger">Disconnect</button>
+        </div>
+      </div>
+      <button id="connectBtn" class="btn btn-primary">Disconnected</button>
+      <div class="settings-wrap">
+        <button id="settingsBtn" class="icon-gear" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        </button>
+        <div id="settingsPanel" class="settings-panel" hidden>
+          <div class="settings-section">
+            <h3>App</h3>
+            <label class="setting"><span>Show debug panel</span><input type="checkbox" id="setDebug" data-setting="debug" /></label>
+            <label class="setting"><span>Clear graph when recording starts</span><input type="checkbox" id="setResetOnRecord" data-setting="resetGraphOnRecord" /></label>
+            <label class="setting"><span>Auto-pause graph under cursor</span><input type="checkbox" id="setAutoPause" data-setting="autoPauseOnHover" /></label>
+            <label class="setting"><span>Live graph window</span>
+              <select id="setWindow" data-setting="liveWindowS">
+                <option value="30">30 s</option>
+                <option value="60">60 s</option>
+                <option value="120">2 min</option>
+                <option value="300">5 min</option>
+              </select>
+            </label>
+          </div>
+          <div class="settings-section">
+            <h3>Device</h3>
+            <label class="setting"><span>Refresh rate</span>
+              <select id="setRate" class="device-setting" disabled>
+                <option value="10">10 Hz</option>
+                <option value="40">40 Hz</option>
+              </select>
+            </label>
+            <label class="setting"><span>Zero mode</span>
+              <select id="setZeroMode" class="device-setting" disabled>
+                <option value="rel">Relative</option>
+                <option value="abs">Absolute</option>
+              </select>
+            </label>
+            <button id="powerOffBtn" class="btn device-setting" disabled>Power off device</button>
+          </div>
+          <div class="settings-section" id="simulateSection">
+            <button id="simulateBtn" class="btn">Simulate device (no hardware)</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main>
+    <section class="readouts">
+      <div class="readout readout-main">
+        <div class="readout-label">Current</div>
+        <div class="readout-value"><span id="current">0.00</span><span id="unit" class="unit">kN</span></div>
+        <div id="overload" class="overload" hidden>⚠ OVERLOAD</div>
+      </div>
+      <div class="readout readout-max-box">
+        <div class="readout-label">Max</div>
+        <div class="readout-value readout-max"><span id="max">0.00</span><span class="unit unit-sm" id="unitMax">kN</span></div>
+        <button id="resetBtn" class="reset-link" title="Reset max (and clear the device peak)">reset</button>
+      </div>
+      <div class="readout">
+        <div class="readout-label">Rate</div>
+        <div class="readout-value readout-sm"><span id="rate">–</span> Hz</div>
+      </div>
+    </section>
+
+    <section class="controls">
+      <div class="control-group">
+        <button class="btn cmd" data-cmd="ZERO" disabled>Zero</button>
+        <button class="btn cmd" data-cmd="SET_ABS_ZERO" disabled>Tare (abs 0)</button>
+      </div>
+      <div class="control-group">
+        <span class="control-label">Units</span>
+        <div class="seg" id="unitSeg">
+          <button class="seg-btn cmd" data-cmd="UNIT_KN" data-unit="kN" disabled>kN</button>
+          <button class="seg-btn cmd" data-cmd="UNIT_KGF" data-unit="kgf" disabled>kgf</button>
+          <button class="seg-btn cmd" data-cmd="UNIT_LBF" data-unit="lbf" disabled>lbf</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="record-bar">
+      <input id="recName" type="text" placeholder="Session name (optional)" />
+      <button id="recordBtn" class="btn btn-record" disabled>● Start Recording</button>
+      <span id="recInfo" class="muted"></span>
+    </section>
+
+    <section class="chart-wrap">
+      <div class="chart-header">
+        <div id="chartTitle" class="chart-title">Live</div>
+        <span class="spacer"></span>
+        <button id="liveBtn" class="btn" hidden>← Back to Live</button>
+        <button id="pauseBtn" class="btn">⏸ Pause</button>
+        <button id="clearGraphBtn" class="btn">Clear graph</button>
+        <button id="exportGraphBtn" class="btn">⤓ Export</button>
+      </div>
+      <div id="chart"></div>
+    </section>
+
+    <section class="sessions">
+      <h2>Saved Sessions</h2>
+      <ul id="sessionList" class="session-list"></ul>
+      <p id="noSessions" class="muted">No saved sessions yet.</p>
+    </section>
+
+    <section id="debugPanel" class="debug" hidden>
+      <div class="debug-head">
+        <strong>Diagnostics</strong>
+        <span id="debugStats" class="muted">waiting…</span>
+        <span class="spacer"></span>
+        <button id="debugClear" class="icon-btn">Clear log</button>
+      </div>
+      <div class="debug-row"><span class="debug-key">last raw</span><code id="debugRaw">—</code></div>
+      <div class="debug-row"><span class="debug-key">ascii</span><code id="debugAscii">—</code></div>
+      <pre id="debugLog" class="debug-log"></pre>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="vendor/uPlot.iife.min.js"></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
