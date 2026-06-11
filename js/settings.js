@@ -15,7 +15,6 @@ const DEFAULTS = {
   sample: '01',               // auto-increments per recording; resets when testId changes
   config: '',                 // configuration (shown large/top-center on graphs)
   material: [],               // material(s) — list of tags (subtitle under configuration)
-  materialOptions: [],        // known material options for the dropdown (also seeded from saved sessions)
 };
 
 function load() {

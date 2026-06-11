@@ -66,9 +66,8 @@ function graphBlobFor(rec) {
 }
 
 async function main() {
-  // Coerce legacy single-string material to a list, and ensure the options list.
+  // Coerce legacy single-string material to a list.
   if (!Array.isArray(settings.material)) settings.material = settings.material ? [settings.material] : [];
-  if (!Array.isArray(settings.materialOptions)) settings.materialOptions = [];
   // Build the UI first so the app renders immediately, independent of storage.
   ui.init();
   ui.initSettings(settings);
@@ -318,19 +317,18 @@ async function refreshSessions() {
   } else {
     list = await store.list();
   }
-  seedMaterialOptions(list);
+  ui.setMaterialOptions(materialsFromSessions(list));
   ui.renderSessions(list, activeSessionId);
 }
 
-// Absorb materials used in saved sessions into the options list (so the
-// Material dropdown shows past items). Also the seed for future material-based
-// filtering/search of the session list.
-function seedMaterialOptions(list) {
-  const opts = new Set(settings.materialOptions || []);
-  const before = opts.size;
-  for (const s of list) for (const m of (Array.isArray(s.material) ? s.material : [])) opts.add(m);
-  if (opts.size !== before) { settings.materialOptions = [...opts]; saveSettings(); }
-  ui.setMaterialOptions([...opts]);
+// Material dropdown options come solely from materials used in saved sessions.
+// (Typing a brand-new material adds it to the current recording; it becomes a
+// selectable option once a session using it has been saved.) This set is also
+// the basis for future material-based filtering/search of the session list.
+function materialsFromSessions(list) {
+  const set = new Set();
+  for (const s of list) for (const m of (Array.isArray(s.material) ? s.material : [])) set.add(m);
+  return [...set];
 }
 
 async function reconnectFolder() {

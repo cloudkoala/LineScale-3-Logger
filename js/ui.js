@@ -48,10 +48,10 @@ export class UI {
     for (const [id, key] of Object.entries(fieldIds)) {
       $(id).onchange = () => this.h.onRecordFieldChange(key, $(id).value.trim());
     }
-    // Material is a multi-select (tags + autocomplete + add-new).
+    // Material is a multi-select (tags + searchable picker). Options are
+    // populated from saved sessions via setMaterialOptions(), not persisted here.
     this.materialSelect = new MultiSelect($('recMaterial'), {
       onChange: (vals) => this.h.onRecordFieldChange('material', vals),
-      onAddOption: (_v, options) => this.h.onRecordFieldChange('materialOptions', options),
     });
     $('liveBtn').onclick = () => this.showLive();
 
@@ -93,8 +93,7 @@ export class UI {
     this.setRecordField('testId', s.testId || '');
     this.setRecordField('sample', s.sample || '01');
     this.setRecordField('config', s.config || '');
-    this.setMaterialOptions(s.materialOptions || []);
-    this.setRecordField('material', s.material || []);
+    this.setRecordField('material', s.material || []); // options are set from saved sessions on refresh
     this.setAutoPause(!!s.autoPauseOnHover);
     this.setLiveWindow(s.liveWindowS);
     this.toggleDebug(!!s.debug);
