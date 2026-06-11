@@ -2,6 +2,11 @@
 // `handlers` object; receives data via its update methods. Knows nothing about
 // BLE or storage.
 
+import { MultiSelect } from './multiselect.js';
+
+// Display helper: material is a list; join for single-line display.
+const matStr = (m) => (Array.isArray(m) ? m.join(', ') : (m || ''));
+
 const $ = (id) => document.getElementById(id);
 
 const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
@@ -39,10 +44,15 @@ export class UI {
 
     // Recording + persistent metadata fields
     $('recordBtn').onclick = () => this.h.onToggleRecord(this.recordFields());
-    const fieldIds = { recTestId: 'testId', recSample: 'sample', recConfig: 'config', recMaterial: 'material' };
+    const fieldIds = { recTestId: 'testId', recSample: 'sample', recConfig: 'config' };
     for (const [id, key] of Object.entries(fieldIds)) {
       $(id).onchange = () => this.h.onRecordFieldChange(key, $(id).value.trim());
     }
+    // Material is a multi-select (tags + autocomplete + add-new).
+    this.materialSelect = new MultiSelect($('recMaterial'), {
+      onChange: (vals) => this.h.onRecordFieldChange('material', vals),
+      onAddOption: (_v, options) => this.h.onRecordFieldChange('materialOptions', options),
+    });
     $('liveBtn').onclick = () => this.showLive();
 
     $('debugClear').onclick = () => { $('debugLog').textContent = ''; };
@@ -83,7 +93,8 @@ export class UI {
     this.setRecordField('testId', s.testId || '');
     this.setRecordField('sample', s.sample || '01');
     this.setRecordField('config', s.config || '');
-    this.setRecordField('material', s.material || '');
+    this.setMaterialOptions(s.materialOptions || []);
+    this.setRecordField('material', s.material || []);
     this.setAutoPause(!!s.autoPauseOnHover);
     this.setLiveWindow(s.liveWindowS);
     this.toggleDebug(!!s.debug);
@@ -231,7 +242,7 @@ export class UI {
     const xs = rec.samples.map((s) => s.t / 1000);
     const ys = rec.samples.map((s) => s.value);
     this.chart.setData([xs.length ? xs : [0], ys.length ? ys : [0]]);
-    const idLine = [rec.config, rec.material].filter(Boolean).join(' / ');
+    const idLine = [rec.config, matStr(rec.material)].filter(Boolean).join(' / ');
     $('chartTitle').textContent = `${rec.name}${idLine ? ' — ' + idLine : ''} · max ${rec.max.toFixed(2)} ${rec.unit}`;
     $('liveBtn').hidden = false;
   }
@@ -262,13 +273,15 @@ export class UI {
       testId: $('recTestId').value.trim(),
       sample: $('recSample').value.trim(),
       config: $('recConfig').value.trim(),
-      material: $('recMaterial').value.trim(),
+      material: this.materialSelect.getValues(),
     };
   }
   setRecordField(key, val) {
-    const map = { testId: 'recTestId', sample: 'recSample', config: 'recConfig', material: 'recMaterial' };
+    if (key === 'material') { this.materialSelect.setValues(val); return; }
+    const map = { testId: 'recTestId', sample: 'recSample', config: 'recConfig' };
     if (map[key]) $(map[key]).value = val;
   }
+  setMaterialOptions(options) { this.materialSelect.setOptions(options); }
 
   // Render the given series to a standalone PNG and download it. Used by the
   // chart's Export button and per-session graph export (no loading).
@@ -427,7 +440,8 @@ export class UI {
     const btn = $('recordBtn');
     btn.classList.toggle('recording', isRecording);
     btn.textContent = isRecording ? '■ Stop Recording' : '● Start Recording';
-    ['recTestId', 'recSample', 'recConfig', 'recMaterial'].forEach((id) => { $(id).disabled = isRecording; });
+    ['recTestId', 'recSample', 'recConfig'].forEach((id) => { $(id).disabled = isRecording; });
+    this.materialSelect.setDisabled(isRecording);
   }
 
   setRecInfo(text) { $('recInfo').textContent = text; }
@@ -455,7 +469,8 @@ export class UI {
       // session name when neither is set.
       const id = document.createElement('div');
       id.className = 'sess-id';
-      id.append(mk('sess-config', s.config || (s.material ? '' : s.name)), mk('sess-material', s.material || ''));
+      const mat = matStr(s.material);
+      id.append(mk('sess-config', s.config || (mat ? '' : s.name)), mk('sess-material', mat));
 
       // Max load / Test ID - Sample.
       const stats = document.createElement('div');

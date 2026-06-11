@@ -115,7 +115,8 @@ export function parseSessionCsv(text, baseName) {
   const count = samples.length;
   const duration = count ? samples[count - 1].t - samples[0].t : 0;
   if (!max) for (const s of samples) if (s.value > max) max = s.value;
-  return { id: baseName, name, testId, sample, config, material,
+  const materials = material ? material.split(';').map((x) => x.trim()).filter(Boolean) : [];
+  return { id: baseName, name, testId, sample, config, material: materials,
     startedAt, endedAt: startedAt + duration, unit, max, count, duration, samples };
 }
 

@@ -36,11 +36,13 @@ function idLabel(testId, sample) {
   return t && s ? `${t}-${s}` : (t || s || '');
 }
 function fmtDateTime(ms) { try { return new Date(ms).toLocaleString(); } catch { return ''; } }
+// Material is a list; join for display on graphs.
+function matStr(m) { return Array.isArray(m) ? m.join(', ') : (m || ''); }
 
 // Graph annotation metadata for a saved recording / for the live view.
 function metaForRec(rec) {
   return {
-    config: rec.config || '', material: rec.material || '',
+    config: rec.config || '', material: matStr(rec.material),
     idLabel: idLabel(rec.testId, rec.sample) || rec.name,
     datetime: fmtDateTime(rec.startedAt),
     filenameBase: rec.name,
@@ -49,7 +51,7 @@ function metaForRec(rec) {
 function metaForLive() {
   const label = idLabel(settings.testId, settings.sample);
   return {
-    config: settings.config || '', material: settings.material || '',
+    config: settings.config || '', material: matStr(settings.material),
     idLabel: label, datetime: fmtDateTime(Date.now()),
     filenameBase: label || 'LineScale',
   };
@@ -64,6 +66,9 @@ function graphBlobFor(rec) {
 }
 
 async function main() {
+  // Coerce legacy single-string material to a list, and ensure the options list.
+  if (!Array.isArray(settings.material)) settings.material = settings.material ? [settings.material] : [];
+  if (!Array.isArray(settings.materialOptions)) settings.materialOptions = [];
   // Build the UI first so the app renders immediately, independent of storage.
   ui.init();
   ui.initSettings(settings);
@@ -306,12 +311,26 @@ async function saveSessionToFolder(rec) {
 // ---- sessions -------------------------------------------------------------
 
 async function refreshSessions() {
+  let list;
   if (usingFolder()) {
     if (!(await folderGranted(false))) { ui.showReconnect(folderHandle.name, reconnectFolder); return; }
-    ui.renderSessions(await fs.listSessions(folderHandle), activeSessionId);
-    return;
+    list = await fs.listSessions(folderHandle);
+  } else {
+    list = await store.list();
   }
-  ui.renderSessions(await store.list(), activeSessionId);
+  seedMaterialOptions(list);
+  ui.renderSessions(list, activeSessionId);
+}
+
+// Absorb materials used in saved sessions into the options list (so the
+// Material dropdown shows past items). Also the seed for future material-based
+// filtering/search of the session list.
+function seedMaterialOptions(list) {
+  const opts = new Set(settings.materialOptions || []);
+  const before = opts.size;
+  for (const s of list) for (const m of (Array.isArray(s.material) ? s.material : [])) opts.add(m);
+  if (opts.size !== before) { settings.materialOptions = [...opts]; saveSettings(); }
+  ui.setMaterialOptions([...opts]);
 }
 
 async function reconnectFolder() {

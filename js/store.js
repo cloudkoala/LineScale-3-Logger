@@ -49,7 +49,7 @@ export class Store {
       testId: (m.testId || '').trim(),
       sample: (m.sample || '').trim(),
       config: (m.config || '').trim(),
-      material: (m.material || '').trim(),
+      material: Array.isArray(m.material) ? m.material : (m.material ? [m.material] : []),
       name: m.name && m.name.trim() ? m.name.trim() : `Session ${new Date(this._startWall).toLocaleString()}`,
       startedAt: this._startWall,
       endedAt: null,
@@ -97,7 +97,8 @@ export class Store {
         id: r.id, name: r.name, startedAt: r.startedAt, endedAt: r.endedAt,
         unit: r.unit, max: r.max, count: r.count ?? r.samples?.length ?? 0,
         duration: r.duration ?? (r.endedAt - r.startedAt),
-        config: r.config || '', material: r.material || '',
+        config: r.config || '',
+        material: Array.isArray(r.material) ? r.material : (r.material ? [r.material] : []),
       }))
       .sort((a, b) => b.startedAt - a.startedAt);
   }
@@ -130,7 +131,7 @@ export function recordingToCSV(rec) {
     `# test id: ${rec.testId || ''}`,
     `# sample: ${rec.sample || ''}`,
     `# configuration: ${rec.config || ''}`,
-    `# material: ${rec.material || ''}`,
+    `# material: ${(Array.isArray(rec.material) ? rec.material : (rec.material ? [rec.material] : [])).join('; ')}`,
     `# started: ${new Date(rec.startedAt).toISOString()}`,
     `# unit: ${rec.unit}`,
     `# samples: ${rec.samples.length}  max: ${rec.max}`,

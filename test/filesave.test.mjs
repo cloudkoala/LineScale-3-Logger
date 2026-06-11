@@ -14,7 +14,7 @@ const rec = {
   testId: 'Beam',
   sample: '03',
   config: '2-bolt lap joint',
-  material: '6061-T6 aluminium',
+  material: ['6061-T6 aluminium', 'epoxy'],
   startedAt: Date.UTC(2026, 5, 10, 12, 30, 0),
   unit: 'kN',
   max: 5.1,
@@ -32,7 +32,7 @@ check('name round-trips', back.name === 'Beam-03', back.name);
 check('testId round-trips', back.testId === 'Beam', back.testId);
 check('sample round-trips', back.sample === '03', back.sample);
 check('config round-trips', back.config === '2-bolt lap joint', back.config);
-check('material round-trips', back.material === '6061-T6 aluminium', back.material);
+check('material round-trips as list', Array.isArray(back.material) && back.material.join('|') === '6061-T6 aluminium|epoxy', JSON.stringify(back.material));
 check('unit round-trips', back.unit === 'kN', back.unit);
 check('max round-trips', back.max === 5.1, `${back.max}`);
 check('count round-trips', back.count === 3, `${back.count}`);
