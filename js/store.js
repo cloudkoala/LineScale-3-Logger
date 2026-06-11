@@ -67,15 +67,22 @@ export class Store {
     this.current.unit = reading.unit;
   }
 
-  async stop() {
+  // Finalize the active recording. Persists to IndexedDB unless persist:false
+  // (used when a folder is the session library and the file is written there).
+  async stop({ persist = true } = {}) {
     if (!this.current) return null;
     const rec = this.current;
     rec.endedAt = Date.now();
     rec.count = rec.samples.length;
     rec.duration = rec.endedAt - rec.startedAt;
-    await idb(this._tx('readwrite').put(rec));
+    if (persist) await idb(this._tx('readwrite').put(rec));
     this.current = null;
     return rec;
+  }
+
+  // Persist a finalized recording (used when naming happens after stopping).
+  async persist(rec) {
+    await idb(this._tx('readwrite').put(rec));
   }
 
   async list() {

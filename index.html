@@ -29,6 +29,10 @@
             <label class="setting"><span>Show debug panel</span><input type="checkbox" id="setDebug" data-setting="debug" /></label>
             <label class="setting"><span>Clear graph when recording starts</span><input type="checkbox" id="setResetOnRecord" data-setting="resetGraphOnRecord" /></label>
             <label class="setting"><span>Auto-pause graph under cursor</span><input type="checkbox" id="setAutoPause" data-setting="autoPauseOnHover" /></label>
+            <div id="autoSaveSettings">
+              <label class="setting"><span>Auto-save recordings (CSV + PNG) to folder</span><input type="checkbox" id="setAutoSave" data-setting="autoSave" /></label>
+              <div class="setting"><span class="muted folder-name" id="folderName">No folder chosen</span><button id="chooseFolderBtn" class="btn">Choose folder…</button></div>
+            </div>
             <label class="setting"><span>Live graph window</span>
               <select id="setWindow" data-setting="liveWindowS">
                 <option value="30">30 s</option>
@@ -131,6 +135,17 @@
       <pre id="debugLog" class="debug-log"></pre>
     </section>
   </main>
+
+  <div id="nameModal" class="modal" hidden>
+    <div class="modal-card">
+      <h3>Name this session</h3>
+      <input id="nameModalInput" type="text" placeholder="Session name" />
+      <div class="modal-actions">
+        <button id="nameModalCancel" class="btn">Skip</button>
+        <button id="nameModalSave" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
 
   <div id="toast" class="toast" hidden></div>
 

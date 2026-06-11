@@ -55,6 +55,8 @@ export class UI {
     $('setDebug').onchange = () => this.h.onSetting('debug', $('setDebug').checked);
     $('setResetOnRecord').onchange = () => this.h.onSetting('resetGraphOnRecord', $('setResetOnRecord').checked);
     $('setAutoPause').onchange = () => this.h.onSetting('autoPauseOnHover', $('setAutoPause').checked);
+    $('setAutoSave').onchange = () => this.h.onSetting('autoSave', $('setAutoSave').checked);
+    $('chooseFolderBtn').onclick = () => this.h.onChooseFolder();
     $('setWindow').onchange = () => this.h.onSetting('liveWindowS', Number($('setWindow').value));
     // Device-state inputs send commands via onDeviceSetting(key, value).
     $('setRate').onchange = () => this.h.onDeviceSetting('rate', $('setRate').value);
@@ -70,6 +72,7 @@ export class UI {
     $('setDebug').checked = !!s.debug;
     $('setResetOnRecord').checked = !!s.resetGraphOnRecord;
     $('setAutoPause').checked = !!s.autoPauseOnHover;
+    $('setAutoSave').checked = !!s.autoSave;
     $('setWindow').value = String(s.liveWindowS);
     this.setAutoPause(!!s.autoPauseOnHover);
     this.setLiveWindow(s.liveWindowS);
@@ -86,6 +89,11 @@ export class UI {
     const m = $('deviceMenu');
     m.hidden = force === undefined ? !m.hidden : !force;
   }
+
+  // Folder auto-save controls are only relevant where the File System Access
+  // API exists (Chrome/Edge).
+  setFsSupported(supported) { $('autoSaveSettings').hidden = !supported; }
+  setFolderName(name) { $('folderName').textContent = name || 'No folder chosen'; }
 
   setLiveWindow(seconds) {
     this.windowS = seconds;
@@ -241,75 +249,85 @@ export class UI {
     this.exportGraphPNG({ name, xs: Array.from(xs), ys: Array.from(ys), unit: this.unit });
   }
 
-  // Render the given series to a standalone PNG and download it. Used both by
-  // the chart's Export button and by per-session graph export (no loading).
-  exportGraphPNG({ name, xs, ys, unit }) {
-    if (!xs || !xs.length) { this.toast('No data to graph', true); return; }
-    const W = 1200, H = 600;
-    const holder = document.createElement('div');
-    holder.style.cssText = `position:fixed;left:-99999px;top:0;width:${W}px;height:${H}px;`;
-    document.body.appendChild(holder);
+  // Render the given series to a standalone PNG and download it. Used by the
+  // chart's Export button and per-session graph export (no loading).
+  exportGraphPNG(opts) {
+    this.graphBlob(opts)
+      .then((blob) => { this._download(blob, `${this._safeName(opts.name)}.png`); this.toast('Graph exported'); })
+      .catch((e) => this.toast('Export failed: ' + (e.message || e), true));
+  }
 
-    let u;
-    try {
-      u = new uPlot({
-        width: W, height: H, scales: { x: { time: false } }, legend: { show: false }, cursor: { show: false },
-        series: [{}, { stroke: '#3fb6ff', width: 2, fill: 'rgba(63,182,255,0.12)', points: { show: false } }],
-        axes: [
-          { stroke: '#8b97a6', grid: { stroke: '#2b3340', width: 1 } },
-          { stroke: '#8b97a6', grid: { stroke: '#2b3340', width: 1 } },
-        ],
-      }, [xs, ys], holder);
-    } catch (e) {
-      holder.remove();
-      this.toast('Export failed: ' + (e.message || e), true);
-      return;
-    }
+  // Render the given series to a titled PNG and resolve with a Blob (for the
+  // Export button and for auto-saving to a folder).
+  graphBlob({ name, xs, ys, unit }) {
+    return new Promise((resolve, reject) => {
+      if (!xs || !xs.length) { reject(new Error('No data to graph')); return; }
+      const W = 1200, H = 600;
+      const holder = document.createElement('div');
+      holder.style.cssText = `position:fixed;left:-99999px;top:0;width:${W}px;height:${H}px;`;
+      document.body.appendChild(holder);
 
-    // uPlot finishes drawing on a later frame; composite once it has rendered.
-    requestAnimationFrame(() => requestAnimationFrame(() => {
+      let u;
       try {
-        const src = holder.querySelector('canvas');
-        const dpr = src.width / W;
-        let max = -Infinity;
-        for (const v of ys) if (v > max) max = v;
-
-        const out = document.createElement('canvas');
-        out.width = src.width; out.height = src.height;
-        const ctx = out.getContext('2d');
-        ctx.fillStyle = '#0e1116'; ctx.fillRect(0, 0, out.width, out.height);
-        ctx.drawImage(src, 0, 0);
-
-        // Top-left: title + subtitle on a translucent panel for legibility.
-        const titleFont = `600 ${Math.round(18 * dpr)}px -apple-system, sans-serif`;
-        const subFont = `${Math.round(13 * dpr)}px -apple-system, sans-serif`;
-        const sub = `${xs[xs.length - 1].toFixed(1)} s · load (${unit}) vs time (s)`;
-        const pad = 12 * dpr;
-        ctx.font = titleFont; const tw = ctx.measureText(name).width;
-        ctx.font = subFont; const sw = ctx.measureText(sub).width;
-        const boxX = 10 * dpr, boxY = 10 * dpr, boxW = Math.max(tw, sw) + pad * 2, boxH = 50 * dpr;
-        ctx.fillStyle = 'rgba(10,13,18,0.82)';
-        ctx.beginPath(); ctx.roundRect(boxX, boxY, boxW, boxH, 8 * dpr); ctx.fill();
-        ctx.fillStyle = '#e6edf3'; ctx.font = titleFont; ctx.fillText(name, boxX + pad, 30 * dpr);
-        ctx.fillStyle = '#8b97a6'; ctx.font = subFont; ctx.fillText(sub, boxX + pad, 49 * dpr);
-
-        // Top-right: large MAX readout.
-        const rightX = out.width - 18 * dpr;
-        ctx.textAlign = 'right';
-        ctx.fillStyle = '#8b97a6'; ctx.font = `${Math.round(14 * dpr)}px -apple-system, sans-serif`;
-        ctx.fillText('MAX', rightX, 30 * dpr);
-        ctx.fillStyle = '#ffb020'; ctx.font = `700 ${Math.round(36 * dpr)}px -apple-system, sans-serif`;
-        ctx.fillText(`${max.toFixed(2)} ${unit}`, rightX, 66 * dpr);
-        ctx.textAlign = 'left';
-
-        out.toBlob((blob) => { this._download(blob, `${this._safeName(name)}.png`); this.toast('Graph exported'); });
+        u = new uPlot({
+          width: W, height: H, scales: { x: { time: false } }, legend: { show: false }, cursor: { show: false },
+          series: [{}, { stroke: '#3fb6ff', width: 2, fill: 'rgba(63,182,255,0.12)', points: { show: false } }],
+          axes: [
+            { stroke: '#8b97a6', grid: { stroke: '#2b3340', width: 1 } },
+            { stroke: '#8b97a6', grid: { stroke: '#2b3340', width: 1 } },
+          ],
+        }, [xs, ys], holder);
       } catch (e) {
-        this.toast('Export failed: ' + (e.message || e), true);
-      } finally {
-        u.destroy();
         holder.remove();
+        reject(e);
+        return;
       }
-    }));
+
+      // uPlot finishes drawing on a later frame; composite once it has rendered.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        try {
+          const src = holder.querySelector('canvas');
+          const dpr = src.width / W;
+          let max = -Infinity;
+          for (const v of ys) if (v > max) max = v;
+
+          const out = document.createElement('canvas');
+          out.width = src.width; out.height = src.height;
+          const ctx = out.getContext('2d');
+          ctx.fillStyle = '#0e1116'; ctx.fillRect(0, 0, out.width, out.height);
+          ctx.drawImage(src, 0, 0);
+
+          // Top-left: title + subtitle on a translucent panel for legibility.
+          const titleFont = `600 ${Math.round(18 * dpr)}px -apple-system, sans-serif`;
+          const subFont = `${Math.round(13 * dpr)}px -apple-system, sans-serif`;
+          const sub = `${xs[xs.length - 1].toFixed(1)} s · load (${unit}) vs time (s)`;
+          const pad = 12 * dpr;
+          ctx.font = titleFont; const tw = ctx.measureText(name).width;
+          ctx.font = subFont; const sw = ctx.measureText(sub).width;
+          const boxX = 10 * dpr, boxY = 10 * dpr, boxW = Math.max(tw, sw) + pad * 2, boxH = 50 * dpr;
+          ctx.fillStyle = 'rgba(10,13,18,0.82)';
+          ctx.beginPath(); ctx.roundRect(boxX, boxY, boxW, boxH, 8 * dpr); ctx.fill();
+          ctx.fillStyle = '#e6edf3'; ctx.font = titleFont; ctx.fillText(name, boxX + pad, 30 * dpr);
+          ctx.fillStyle = '#8b97a6'; ctx.font = subFont; ctx.fillText(sub, boxX + pad, 49 * dpr);
+
+          // Top-right: large MAX readout.
+          const rightX = out.width - 18 * dpr;
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#8b97a6'; ctx.font = `${Math.round(14 * dpr)}px -apple-system, sans-serif`;
+          ctx.fillText('MAX', rightX, 30 * dpr);
+          ctx.fillStyle = '#ffb020'; ctx.font = `700 ${Math.round(36 * dpr)}px -apple-system, sans-serif`;
+          ctx.fillText(`${max.toFixed(2)} ${unit}`, rightX, 66 * dpr);
+          ctx.textAlign = 'left';
+
+          out.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('PNG encode failed'))));
+        } catch (e) {
+          reject(e);
+        } finally {
+          u.destroy();
+          holder.remove();
+        }
+      }));
+    });
   }
 
   _download(blob, filename) {
@@ -422,6 +440,48 @@ export class UI {
       li.append(name, meta, actions);
       ul.append(li);
     }
+  }
+
+  // Show a "reconnect folder" prompt in the sessions area (needed after a
+  // reload, when the browser must re-grant folder permission via a gesture).
+  showReconnect(folderName, onReconnect) {
+    $('noSessions').hidden = true;
+    const ul = $('sessionList');
+    ul.innerHTML = '';
+    const li = document.createElement('li');
+    li.className = 'session-item';
+    const meta = document.createElement('span');
+    meta.className = 'session-meta';
+    meta.textContent = `Folder “${folderName}” needs permission to list its sessions.`;
+    const btn = document.createElement('button');
+    btn.className = 'icon-btn';
+    btn.textContent = 'Reconnect folder';
+    btn.onclick = onReconnect;
+    li.append(meta, btn);
+    ul.append(li);
+  }
+
+  // Modal name prompt. Resolves to a trimmed name, or null if skipped/empty.
+  promptName(defaultName) {
+    return new Promise((resolve) => {
+      const modal = $('nameModal'), input = $('nameModalInput');
+      const save = $('nameModalSave'), cancel = $('nameModalCancel');
+      input.value = '';
+      input.placeholder = defaultName || 'Session name';
+      modal.hidden = false;
+      input.focus();
+      const done = (val) => {
+        modal.hidden = true;
+        save.onclick = cancel.onclick = input.onkeydown = null;
+        resolve(val && val.trim() ? val.trim() : null);
+      };
+      save.onclick = () => done(input.value);
+      cancel.onclick = () => done(null);
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') done(input.value);
+        else if (e.key === 'Escape') done(null);
+      };
+    });
   }
 
   _iconBtn(label, fn, danger) {
