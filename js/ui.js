@@ -4,6 +4,8 @@
 
 const $ = (id) => document.getElementById(id);
 
+const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+
 export class UI {
   constructor(handlers) {
     this.h = handlers;
@@ -229,7 +231,8 @@ export class UI {
     const xs = rec.samples.map((s) => s.t / 1000);
     const ys = rec.samples.map((s) => s.value);
     this.chart.setData([xs.length ? xs : [0], ys.length ? ys : [0]]);
-    $('chartTitle').textContent = `${rec.name} — ${rec.samples.length} samples, max ${rec.max.toFixed(2)} ${rec.unit}`;
+    const idLine = [rec.config, rec.material].filter(Boolean).join(' / ');
+    $('chartTitle').textContent = `${rec.name}${idLine ? ' — ' + idLine : ''} · max ${rec.max.toFixed(2)} ${rec.unit}`;
     $('liveBtn').hidden = false;
   }
 
@@ -435,32 +438,39 @@ export class UI {
     const ul = $('sessionList');
     ul.innerHTML = '';
     $('noSessions').hidden = list.length > 0;
+    const mk = (cls, text) => { const el = document.createElement('span'); el.className = cls; el.textContent = text; return el; };
     for (const s of list) {
       const li = document.createElement('li');
       li.className = 'session-item' + (s.id === activeId ? ' active' : '');
+      li.title = 'Click to view';
+      li.onclick = () => this.h.onSelectSession(s.id);
+      const d = new Date(s.startedAt);
 
-      const name = document.createElement('input');
-      name.className = 'session-name';
-      name.value = s.name;
-      name.onclick = (e) => e.stopPropagation();
-      name.onchange = () => this.h.onRenameSession(s.id, name.value);
+      // Date / time (two lines).
+      const when = document.createElement('div');
+      when.className = 'sess-when';
+      when.append(mk('', d.toLocaleDateString()), mk('', d.toLocaleTimeString()));
 
-      const meta = document.createElement('span');
-      meta.className = 'session-meta';
-      const dur = (s.duration / 1000).toFixed(1);
-      const tags = [s.config, s.material].filter(Boolean).join(' / ');
-      meta.textContent = `${new Date(s.startedAt).toLocaleString()} · ${dur}s · max ${s.max.toFixed(2)} ${s.unit} · ${s.count} pts` + (tags ? ` · ${tags}` : '');
+      // Configuration / material (centered, prominent). Falls back to the
+      // session name when neither is set.
+      const id = document.createElement('div');
+      id.className = 'sess-id';
+      id.append(mk('sess-config', s.config || (s.material ? '' : s.name)), mk('sess-material', s.material || ''));
+
+      // Max load / Test ID - Sample.
+      const stats = document.createElement('div');
+      stats.className = 'sess-stats';
+      stats.append(mk('sess-max', `${s.max.toFixed(2)} ${s.unit}`), mk('sess-dur', s.name));
 
       const actions = document.createElement('div');
       actions.className = 'session-actions';
       actions.append(
-        this._iconBtn('View', () => this.h.onSelectSession(s.id)),
         this._iconBtn('Graph', () => this.h.onExportSessionGraph(s.id)),
         this._iconBtn('CSV', () => this.h.onExportSession(s.id)),
-        this._iconBtn('Delete', () => this.h.onDeleteSession(s.id), true),
+        this._iconBtn(TRASH_SVG, () => this.h.onDeleteSession(s.id), true, { html: true, title: 'Delete' }),
       );
 
-      li.append(name, meta, actions);
+      li.append(when, id, stats, actions);
       ul.append(li);
     }
   }
@@ -508,10 +518,11 @@ export class UI {
     });
   }
 
-  _iconBtn(label, fn, danger) {
+  _iconBtn(label, fn, danger, opts = {}) {
     const b = document.createElement('button');
-    b.className = 'icon-btn' + (danger ? ' danger' : '');
-    b.textContent = label;
+    b.className = 'icon-btn' + (danger ? ' danger' : '') + (opts.html ? ' icon-btn-svg' : '');
+    if (opts.html) b.innerHTML = label; else b.textContent = label;
+    if (opts.title) b.title = opts.title;
     b.onclick = (e) => { e.stopPropagation(); fn(); };
     return b;
   }
