@@ -113,11 +113,12 @@ main {
 .seg-btn.active { background: var(--accent-2); color: #fff; }
 
 /* Record bar */
-.record-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-#recName {
+.record-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.record-bar input {
   background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
-  color: var(--text); padding: 9px 12px; font-size: 14px; min-width: 240px;
+  color: var(--text); padding: 9px 12px; font-size: 14px; min-width: 150px;
 }
+.record-bar input.rec-narrow { min-width: 0; width: 96px; }
 
 /* Chart */
 .chart-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 14px 16px; }

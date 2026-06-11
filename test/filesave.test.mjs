@@ -10,7 +10,11 @@ const check = (name, cond, detail = '') =>
        : (fail++, console.error(`FAIL  ${name}  ${detail}`));
 
 const rec = {
-  name: 'Pull Test #3',
+  name: 'Beam-03',
+  testId: 'Beam',
+  sample: '03',
+  config: '2-bolt lap joint',
+  material: '6061-T6 aluminium',
   startedAt: Date.UTC(2026, 5, 10, 12, 30, 0),
   unit: 'kN',
   max: 5.1,
@@ -22,9 +26,13 @@ const rec = {
 };
 
 const csv = recordingToCSV(rec);
-const back = parseSessionCsv(csv, 'Pull Test #3');
+const back = parseSessionCsv(csv, 'Beam-03');
 
-check('name round-trips', back.name === 'Pull Test #3', back.name);
+check('name round-trips', back.name === 'Beam-03', back.name);
+check('testId round-trips', back.testId === 'Beam', back.testId);
+check('sample round-trips', back.sample === '03', back.sample);
+check('config round-trips', back.config === '2-bolt lap joint', back.config);
+check('material round-trips', back.material === '6061-T6 aluminium', back.material);
 check('unit round-trips', back.unit === 'kN', back.unit);
 check('max round-trips', back.max === 5.1, `${back.max}`);
 check('count round-trips', back.count === 3, `${back.count}`);

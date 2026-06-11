@@ -89,12 +89,17 @@ export async function saveFiles(dir, name, files) {
 export function parseSessionCsv(text, baseName) {
   const lines = text.split(/\r?\n/);
   let name = baseName, startedAt = 0, unit = 'kN', max = 0;
+  let testId = '', sample = '', config = '', material = '';
   const samples = [];
   for (const line of lines) {
     if (!line) continue;
     if (line[0] === '#') {
       let m;
       if ((m = line.match(/^#\s*LineScale 3 recording:\s*(.*)$/))) name = m[1].trim() || baseName;
+      else if ((m = line.match(/^#\s*test id:\s*(.*)$/))) testId = m[1].trim();
+      else if ((m = line.match(/^#\s*sample:\s*(.*)$/))) sample = m[1].trim();
+      else if ((m = line.match(/^#\s*configuration:\s*(.*)$/))) config = m[1].trim();
+      else if ((m = line.match(/^#\s*material:\s*(.*)$/))) material = m[1].trim();
       else if ((m = line.match(/^#\s*started:\s*(.*)$/))) { const d = Date.parse(m[1].trim()); if (!Number.isNaN(d)) startedAt = d; }
       else if ((m = line.match(/^#\s*unit:\s*(.*)$/))) unit = m[1].trim() || unit;
       else if ((m = line.match(/max:\s*([-\d.]+)/))) max = parseFloat(m[1]) || max;
@@ -110,7 +115,8 @@ export function parseSessionCsv(text, baseName) {
   const count = samples.length;
   const duration = count ? samples[count - 1].t - samples[0].t : 0;
   if (!max) for (const s of samples) if (s.value > max) max = s.value;
-  return { id: baseName, name, startedAt, endedAt: startedAt + duration, unit, max, count, duration, samples };
+  return { id: baseName, name, testId, sample, config, material,
+    startedAt, endedAt: startedAt + duration, unit, max, count, duration, samples };
 }
 
 export async function listSessions(dir) {
@@ -121,7 +127,8 @@ export async function listSessions(dir) {
     try {
       const rec = parseSessionCsv(await (await entry.getFile()).text(), base);
       out.push({ id: base, name: rec.name, startedAt: rec.startedAt, endedAt: rec.endedAt,
-        unit: rec.unit, max: rec.max, count: rec.count, duration: rec.duration });
+        unit: rec.unit, max: rec.max, count: rec.count, duration: rec.duration,
+        config: rec.config, material: rec.material });
     } catch { /* skip unreadable files */ }
   }
   return out.sort((a, b) => b.startedAt - a.startedAt);
@@ -134,6 +141,11 @@ export async function readSession(dir, base) {
 
 export async function readCsvBlob(dir, base) {
   return (await dir.getFileHandle(`${base}.csv`)).getFile();
+}
+
+// Return a File for an arbitrary entry in the directory (throws if missing).
+export async function readFileBlob(dir, filename) {
+  return (await dir.getFileHandle(filename)).getFile();
 }
 
 export async function hasSession(dir, name) {

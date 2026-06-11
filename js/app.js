@@ -27,8 +27,41 @@ async function getSessionActive(id) {
 const ui = new UI({
   onConnectToggle, onSimulate, onCommand, onResetMax, onClearGraph,
   onToggleRecord, onSelectSession, onRenameSession, onExportSession, onExportSessionGraph, onDeleteSession,
-  onSetting, onDeviceSetting, onPowerOff, onChooseFolder,
+  onSetting, onDeviceSetting, onPowerOff, onChooseFolder, onRecordFieldChange, onExportGraph,
 });
+
+// Build a "Test ID-Sample" label, tolerating either field being blank.
+function idLabel(testId, sample) {
+  const t = (testId || '').trim(), s = (sample || '').trim();
+  return t && s ? `${t}-${s}` : (t || s || '');
+}
+function fmtDateTime(ms) { try { return new Date(ms).toLocaleString(); } catch { return ''; } }
+
+// Graph annotation metadata for a saved recording / for the live view.
+function metaForRec(rec) {
+  return {
+    config: rec.config || '', material: rec.material || '',
+    idLabel: idLabel(rec.testId, rec.sample) || rec.name,
+    datetime: fmtDateTime(rec.startedAt),
+    filenameBase: rec.name,
+  };
+}
+function metaForLive() {
+  const label = idLabel(settings.testId, settings.sample);
+  return {
+    config: settings.config || '', material: settings.material || '',
+    idLabel: label, datetime: fmtDateTime(Date.now()),
+    filenameBase: label || 'LineScale',
+  };
+}
+function graphBlobFor(rec) {
+  return ui.graphBlob({
+    xs: rec.samples.map((s) => s.t / 1000),
+    ys: rec.samples.map((s) => s.value),
+    unit: rec.unit,
+    ...metaForRec(rec),
+  });
+}
 
 async function main() {
   // Build the UI first so the app renders immediately, independent of storage.
@@ -178,21 +211,29 @@ function onPowerOff() {
 
 // ---- recording ------------------------------------------------------------
 
-async function onToggleRecord(name) {
-  if (store.recording) {
-    await stopRecording();
-  } else {
-    if (!connection) return;
-    if (settings.resetGraphOnRecord) ui.clearLive(); // fresh graph for the new recording
-    recordingNamed = !!(name && name.trim());
-    store.startRecording(name, lastUnit || 'kN');
-    ui.setRecordingState(true);
-    recInfoTimer = setInterval(updateRecInfo, 250);
-    updateRecInfo();
-    // Pre-authorize the folder now (Start is a user gesture) so the save on
-    // Stop is silent even after a page reload.
-    if (settings.autoSave && folderHandle) fs.ensurePermission(folderHandle, { prompt: true });
-  }
+async function onToggleRecord(fields) {
+  if (store.recording) { await stopRecording(); return; }
+  if (!connection) return;
+  if (settings.resetGraphOnRecord) ui.clearLive(); // fresh graph for the new recording
+
+  recordingNamed = !!(fields.testId && fields.testId.trim());
+  // Persist the (possibly edited) metadata fields.
+  Object.assign(settings, {
+    testId: fields.testId, sample: fields.sample || '01',
+    config: fields.config, material: fields.material,
+  });
+  saveSettings();
+
+  store.startRecording({
+    testId: fields.testId, sample: fields.sample, config: fields.config, material: fields.material,
+    name: idLabel(fields.testId, fields.sample),
+  }, lastUnit || 'kN');
+  ui.setRecordingState(true);
+  recInfoTimer = setInterval(updateRecInfo, 250);
+  updateRecInfo();
+  // Pre-authorize the folder now (Start is a user gesture) so the save on
+  // Stop is silent even after a page reload.
+  if (settings.autoSave && folderHandle) fs.ensurePermission(folderHandle, { prompt: true });
 }
 
 function updateRecInfo() {
@@ -210,18 +251,31 @@ async function stopRecording() {
   ui.setRecordingState(false);
   if (!rec) { await refreshSessions(); return; }
 
-  // Prompt for a name if the user didn't type one (Skip keeps the auto name).
+  // Prompt for a Test ID if none was given (Skip keeps the auto name).
   if (!recordingNamed) {
-    const entered = await ui.promptName(rec.name);
-    if (entered) rec.name = entered;
+    const entered = await ui.promptName(rec.testId || '', 'Test ID');
+    if (entered) {
+      rec.testId = entered;
+      settings.testId = entered; saveSettings(); ui.setRecordField('testId', entered);
+    }
   }
+  // Name = Test ID - Sample (falls back to the auto name when both are blank).
+  rec.name = idLabel(rec.testId, rec.sample) || rec.name;
 
   // Save to the active library: the folder, or browser storage.
   if (usingFolder()) { if (rec.samples.length) await saveSessionToFolder(rec); }
   else await store.persist(rec);
 
   ui.setRecInfo(`saved “${rec.name}” (${rec.count} pts)`);
+  advanceSample();
   await refreshSessions();
+}
+
+// Bump the sample number for the next recording (e.g. 01 -> 02).
+function advanceSample() {
+  const n = parseInt(settings.sample, 10);
+  const next = String((Number.isFinite(n) ? n : 0) + 1).padStart(2, '0');
+  settings.sample = next; saveSettings(); ui.setRecordField('sample', next);
 }
 
 // Write a finished recording's CSV + PNG to the chosen folder. Falls back to a
@@ -282,23 +336,68 @@ async function onRenameSession(id, name) {
   await refreshSessions();
 }
 
-async function onExportSession(id) {
-  const rec = await getSessionActive(id);
-  if (!rec) return;
-  const blob = new Blob([recordingToCSV(rec)], { type: 'text/csv' });
-  ui._download(blob, `${ui._safeName(rec.name)}.csv`);
+// Open an already-saved file from the folder in a new browser tab (no
+// download). A web app can't hand it to an OS app, so this is the closest.
+// Opens a blank tab synchronously (within the click gesture) to dodge popup
+// blocking, then points it at the file. Returns false if the file is absent.
+async function openSessionFile(base, ext, isImage) {
+  const win = window.open('', '_blank');
+  try {
+    const file = await fs.readFileBlob(folderHandle, `${base}.${ext}`);
+    const blob = isImage ? file : new Blob([await file.text()], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    if (win) win.location.href = url; else window.open(url, '_blank');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    return true;
+  } catch {
+    if (win) win.close();
+    return false;
+  }
 }
 
-// Export a saved session's graph as a PNG without loading it into the view.
+// CSV icon: open the file in folder mode, else download a copy.
+async function onExportSession(id) {
+  if (usingFolder() && (await openSessionFile(id, 'csv', false))) return;
+  const rec = await getSessionActive(id);
+  if (!rec) return;
+  ui._download(new Blob([recordingToCSV(rec)], { type: 'text/csv' }), `${ui._safeName(rec.name)}.csv`);
+}
+
+// Graph icon: open the saved PNG in folder mode, else render + download one.
 async function onExportSessionGraph(id) {
+  if (usingFolder() && (await openSessionFile(id, 'png', true))) return;
   const rec = await getSessionActive(id);
   if (!rec || !rec.samples.length) { ui.toast('No data in this session', true); return; }
   ui.exportGraphPNG({
-    name: rec.name,
     xs: rec.samples.map((s) => s.t / 1000),
     ys: rec.samples.map((s) => s.value),
     unit: rec.unit,
+    ...metaForRec(rec),
   });
+}
+
+// Export the live view (or delegate to the loaded session's export).
+async function onExportGraph() {
+  if (activeSessionId) { await onExportSessionGraph(activeSessionId); return; }
+  const d = ui.currentData();
+  if (d.xs.length < 2) { ui.toast('Nothing to export yet', true); return; }
+  ui.exportGraphPNG({ xs: d.xs, ys: d.ys, unit: d.unit, ...metaForLive() });
+}
+
+// Persist an edited metadata field; changing the Test ID resets the sample.
+function onRecordFieldChange(key, value) {
+  if (key === 'sample') value = normalizeSample(value);
+  settings[key] = value;
+  if (key === 'sample') ui.setRecordField('sample', value);
+  if (key === 'testId') { settings.sample = '01'; ui.setRecordField('sample', '01'); }
+  saveSettings();
+}
+
+function normalizeSample(v) {
+  const t = (v || '').trim();
+  if (!t) return '01';
+  const n = parseInt(t, 10);
+  return Number.isFinite(n) ? String(n).padStart(2, '0') : t;
 }
 
 async function onDeleteSession(id) {
@@ -329,15 +428,6 @@ async function activateFolder() {
   } catch (e) { ui.toast('Migration error: ' + (e.message || e), true); }
   if (migrated) ui.toast(`Copied ${migrated} session${migrated > 1 ? 's' : ''} into ${folderHandle.name}`);
   await refreshSessions();
-}
-
-function graphBlobFor(rec) {
-  return ui.graphBlob({
-    name: rec.name,
-    xs: rec.samples.map((s) => s.t / 1000),
-    ys: rec.samples.map((s) => s.value),
-    unit: rec.unit,
-  });
 }
 
 main();

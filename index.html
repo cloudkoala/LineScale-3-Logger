@@ -100,7 +100,10 @@
     </section>
 
     <section class="record-bar">
-      <input id="recName" type="text" placeholder="Session name (optional)" />
+      <input id="recTestId" type="text" placeholder="Test ID" />
+      <input id="recSample" type="text" placeholder="Sample #" class="rec-narrow" />
+      <input id="recConfig" type="text" placeholder="Configuration" />
+      <input id="recMaterial" type="text" placeholder="Material" />
       <button id="recordBtn" class="btn btn-record" disabled>● Start Recording</button>
       <span id="recInfo" class="muted"></span>
     </section>
@@ -138,7 +141,7 @@
 
   <div id="nameModal" class="modal" hidden>
     <div class="modal-card">
-      <h3>Name this session</h3>
+      <h3 id="nameModalTitle">Name this session</h3>
       <input id="nameModalInput" type="text" placeholder="Session name" />
       <div class="modal-actions">
         <button id="nameModalCancel" class="btn">Skip</button>

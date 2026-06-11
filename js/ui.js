@@ -33,10 +33,14 @@ export class UI {
     $('resetBtn').onclick = () => this.h.onResetMax();
     $('clearGraphBtn').onclick = () => this.h.onClearGraph();
     $('pauseBtn').onclick = () => this.togglePause();
-    $('exportGraphBtn').onclick = () => this.exportCurrentGraph();
+    $('exportGraphBtn').onclick = () => this.h.onExportGraph();
 
-    // Recording
-    $('recordBtn').onclick = () => this.h.onToggleRecord($('recName').value);
+    // Recording + persistent metadata fields
+    $('recordBtn').onclick = () => this.h.onToggleRecord(this.recordFields());
+    const fieldIds = { recTestId: 'testId', recSample: 'sample', recConfig: 'config', recMaterial: 'material' };
+    for (const [id, key] of Object.entries(fieldIds)) {
+      $(id).onchange = () => this.h.onRecordFieldChange(key, $(id).value.trim());
+    }
     $('liveBtn').onclick = () => this.showLive();
 
     $('debugClear').onclick = () => { $('debugLog').textContent = ''; };
@@ -74,6 +78,10 @@ export class UI {
     $('setAutoPause').checked = !!s.autoPauseOnHover;
     $('setAutoSave').checked = !!s.autoSave;
     $('setWindow').value = String(s.liveWindowS);
+    this.setRecordField('testId', s.testId || '');
+    this.setRecordField('sample', s.sample || '01');
+    this.setRecordField('config', s.config || '');
+    this.setRecordField('material', s.material || '');
     this.setAutoPause(!!s.autoPauseOnHover);
     this.setLiveWindow(s.liveWindowS);
     this.toggleDebug(!!s.debug);
@@ -239,27 +247,37 @@ export class UI {
     if (this.viewMode === 'live') this.chart.setData([[0], [0]]);
   }
 
-  // Export whatever the chart is currently showing (live or a loaded session).
-  exportCurrentGraph() {
-    const xs = this.chart?.data?.[0], ys = this.chart?.data?.[1];
-    if (!xs || xs.length < 2) { this.toast('Nothing to export yet', true); return; }
-    const name = this.viewMode === 'session'
-      ? (this.sessionName || 'session')
-      : `LineScale ${new Date().toLocaleString()}`;
-    this.exportGraphPNG({ name, xs: Array.from(xs), ys: Array.from(ys), unit: this.unit });
+  // Data currently shown on the chart (for the live Export button).
+  currentData() {
+    const d = this.chart && this.chart.data;
+    return { xs: Array.from((d && d[0]) || []), ys: Array.from((d && d[1]) || []), unit: this.unit };
+  }
+
+  // Read / set the recording metadata input fields.
+  recordFields() {
+    return {
+      testId: $('recTestId').value.trim(),
+      sample: $('recSample').value.trim(),
+      config: $('recConfig').value.trim(),
+      material: $('recMaterial').value.trim(),
+    };
+  }
+  setRecordField(key, val) {
+    const map = { testId: 'recTestId', sample: 'recSample', config: 'recConfig', material: 'recMaterial' };
+    if (map[key]) $(map[key]).value = val;
   }
 
   // Render the given series to a standalone PNG and download it. Used by the
   // chart's Export button and per-session graph export (no loading).
   exportGraphPNG(opts) {
     this.graphBlob(opts)
-      .then((blob) => { this._download(blob, `${this._safeName(opts.name)}.png`); this.toast('Graph exported'); })
+      .then((blob) => { this._download(blob, `${this._safeName(opts.filenameBase || opts.idLabel || 'graph')}.png`); this.toast('Graph exported'); })
       .catch((e) => this.toast('Export failed: ' + (e.message || e), true));
   }
 
-  // Render the given series to a titled PNG and resolve with a Blob (for the
-  // Export button and for auto-saving to a folder).
-  graphBlob({ name, xs, ys, unit }) {
+  // Render the given series to an annotated PNG and resolve with a Blob.
+  // meta: { config, material, idLabel, datetime } drawn in a header band.
+  graphBlob({ xs, ys, unit, config = '', material = '', idLabel = '', datetime = '' }) {
     return new Promise((resolve, reject) => {
       if (!xs || !xs.length) { reject(new Error('No data to graph')); return; }
       const W = 1200, H = 600;
@@ -297,26 +315,30 @@ export class UI {
           ctx.fillStyle = '#0e1116'; ctx.fillRect(0, 0, out.width, out.height);
           ctx.drawImage(src, 0, 0);
 
-          // Top-left: title + subtitle on a translucent panel for legibility.
-          const titleFont = `600 ${Math.round(18 * dpr)}px -apple-system, sans-serif`;
-          const subFont = `${Math.round(13 * dpr)}px -apple-system, sans-serif`;
-          const sub = `${xs[xs.length - 1].toFixed(1)} s · load (${unit}) vs time (s)`;
-          const pad = 12 * dpr;
-          ctx.font = titleFont; const tw = ctx.measureText(name).width;
-          ctx.font = subFont; const sw = ctx.measureText(sub).width;
-          const boxX = 10 * dpr, boxY = 10 * dpr, boxW = Math.max(tw, sw) + pad * 2, boxH = 50 * dpr;
-          ctx.fillStyle = 'rgba(10,13,18,0.82)';
-          ctx.beginPath(); ctx.roundRect(boxX, boxY, boxW, boxH, 8 * dpr); ctx.fill();
-          ctx.fillStyle = '#e6edf3'; ctx.font = titleFont; ctx.fillText(name, boxX + pad, 30 * dpr);
-          ctx.fillStyle = '#8b97a6'; ctx.font = subFont; ctx.fillText(sub, boxX + pad, 49 * dpr);
+          const font = (px, weight = '') => `${weight} ${Math.round(px * dpr)}px -apple-system, sans-serif`.trim();
+          const dur = xs.length ? xs[xs.length - 1] : 0;
 
-          // Top-right: large MAX readout.
-          const rightX = out.width - 18 * dpr;
+          // Translucent header band across the top for legibility.
+          ctx.fillStyle = 'rgba(10,13,18,0.72)';
+          ctx.fillRect(0, 0, out.width, 96 * dpr);
+
+          // Left: MAX readout + duration.
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#8b97a6'; ctx.font = font(13); ctx.fillText('MAX', 18 * dpr, 26 * dpr);
+          ctx.fillStyle = '#ffb020'; ctx.font = font(30, '700'); ctx.fillText(`${max.toFixed(2)} ${unit}`, 18 * dpr, 60 * dpr);
+          ctx.fillStyle = '#8b97a6'; ctx.font = font(12); ctx.fillText(`${dur.toFixed(1)} s`, 18 * dpr, 82 * dpr);
+
+          // Center: Configuration (large) + Material (subtitle).
+          ctx.textAlign = 'center';
+          const cx = out.width / 2;
+          if (config) { ctx.fillStyle = '#e6edf3'; ctx.font = font(26, '700'); ctx.fillText(config, cx, 42 * dpr); }
+          if (material) { ctx.fillStyle = '#8b97a6'; ctx.font = font(15); ctx.fillText(material, cx, 70 * dpr); }
+
+          // Right: Test ID - Sample, then date/time.
           ctx.textAlign = 'right';
-          ctx.fillStyle = '#8b97a6'; ctx.font = `${Math.round(14 * dpr)}px -apple-system, sans-serif`;
-          ctx.fillText('MAX', rightX, 30 * dpr);
-          ctx.fillStyle = '#ffb020'; ctx.font = `700 ${Math.round(36 * dpr)}px -apple-system, sans-serif`;
-          ctx.fillText(`${max.toFixed(2)} ${unit}`, rightX, 66 * dpr);
+          const rx = out.width - 18 * dpr;
+          if (idLabel) { ctx.fillStyle = '#e6edf3'; ctx.font = font(20, '700'); ctx.fillText(idLabel, rx, 38 * dpr); }
+          if (datetime) { ctx.fillStyle = '#8b97a6'; ctx.font = font(13); ctx.fillText(datetime, rx, 62 * dpr); }
           ctx.textAlign = 'left';
 
           out.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('PNG encode failed'))));
@@ -402,7 +424,7 @@ export class UI {
     const btn = $('recordBtn');
     btn.classList.toggle('recording', isRecording);
     btn.textContent = isRecording ? '■ Stop Recording' : '● Start Recording';
-    $('recName').disabled = isRecording;
+    ['recTestId', 'recSample', 'recConfig', 'recMaterial'].forEach((id) => { $(id).disabled = isRecording; });
   }
 
   setRecInfo(text) { $('recInfo').textContent = text; }
@@ -426,7 +448,8 @@ export class UI {
       const meta = document.createElement('span');
       meta.className = 'session-meta';
       const dur = (s.duration / 1000).toFixed(1);
-      meta.textContent = `${new Date(s.startedAt).toLocaleString()} · ${dur}s · max ${s.max.toFixed(2)} ${s.unit} · ${s.count} pts`;
+      const tags = [s.config, s.material].filter(Boolean).join(' / ');
+      meta.textContent = `${new Date(s.startedAt).toLocaleString()} · ${dur}s · max ${s.max.toFixed(2)} ${s.unit} · ${s.count} pts` + (tags ? ` · ${tags}` : '');
 
       const actions = document.createElement('div');
       actions.className = 'session-actions';
@@ -461,13 +484,14 @@ export class UI {
     ul.append(li);
   }
 
-  // Modal name prompt. Resolves to a trimmed name, or null if skipped/empty.
-  promptName(defaultName) {
+  // Modal text prompt. Resolves to a trimmed value, or null if skipped/empty.
+  promptName(defaultValue, title = 'Name this session') {
     return new Promise((resolve) => {
       const modal = $('nameModal'), input = $('nameModalInput');
       const save = $('nameModalSave'), cancel = $('nameModalCancel');
+      $('nameModalTitle').textContent = title;
       input.value = '';
-      input.placeholder = defaultName || 'Session name';
+      input.placeholder = defaultValue || title;
       modal.hidden = false;
       input.focus();
       const done = (val) => {

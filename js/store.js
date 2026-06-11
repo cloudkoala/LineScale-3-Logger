@@ -41,11 +41,16 @@ export class Store {
 
   get recording() { return this.current !== null; }
 
-  startRecording(name, unit) {
+  startRecording(meta, unit) {
+    const m = meta || {};
     this._startWall = Date.now();
     this.current = {
       id: `rec-${this._startWall}`,
-      name: name && name.trim() ? name.trim() : `Session ${new Date(this._startWall).toLocaleString()}`,
+      testId: (m.testId || '').trim(),
+      sample: (m.sample || '').trim(),
+      config: (m.config || '').trim(),
+      material: (m.material || '').trim(),
+      name: m.name && m.name.trim() ? m.name.trim() : `Session ${new Date(this._startWall).toLocaleString()}`,
       startedAt: this._startWall,
       endedAt: null,
       unit,
@@ -92,6 +97,7 @@ export class Store {
         id: r.id, name: r.name, startedAt: r.startedAt, endedAt: r.endedAt,
         unit: r.unit, max: r.max, count: r.count ?? r.samples?.length ?? 0,
         duration: r.duration ?? (r.endedAt - r.startedAt),
+        config: r.config || '', material: r.material || '',
       }))
       .sort((a, b) => b.startedAt - a.startedAt);
   }
@@ -121,6 +127,10 @@ export class Store {
 export function recordingToCSV(rec) {
   const lines = [
     `# LineScale 3 recording: ${rec.name}`,
+    `# test id: ${rec.testId || ''}`,
+    `# sample: ${rec.sample || ''}`,
+    `# configuration: ${rec.config || ''}`,
+    `# material: ${rec.material || ''}`,
     `# started: ${new Date(rec.startedAt).toISOString()}`,
     `# unit: ${rec.unit}`,
     `# samples: ${rec.samples.length}  max: ${rec.max}`,
