@@ -104,10 +104,14 @@ main {
 /* Per-channel readout strip (one card per connected device) */
 .channel-strip { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
 .chan-card {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 12px; padding: 10px 12px; min-width: 220px;
 }
+.chan-top { display: flex; align-items: center; gap: 10px; }
+.chan-ctl { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.chan-ctl .btn-sm { padding: 5px 10px; font-size: 12px; }
+.chan-unit-btn { min-width: 44px; font-variant-numeric: tabular-nums; }
 .chan-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 .chan-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .chan-label {

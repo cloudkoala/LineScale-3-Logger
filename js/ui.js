@@ -52,10 +52,6 @@ export class UI {
     $('connectBtn').onclick = () => this.h.onConnect();
     $('simulateBtn').onclick = () => this.h.onSimulate();
 
-    // Command buttons (data-cmd attribute -> protocol command name)
-    document.querySelectorAll('.cmd').forEach((btn) => {
-      btn.onclick = () => this.h.onCommand(btn.dataset.cmd);
-    });
     $('resetBtn').onclick = () => this.h.onResetMax();
     $('clearGraphBtn').onclick = () => this.h.onClearGraph();
     $('pauseBtn').onclick = () => this.togglePause();
@@ -554,7 +550,6 @@ export class UI {
     // Simulate stays available so additional sims can be added for testing.
 
     // Enable/disable device controls (operate on the primary).
-    document.querySelectorAll('.cmd').forEach((b) => (b.disabled = !connected));
     document.querySelectorAll('.device-setting').forEach((el) => (el.disabled = !connected));
     $('recordBtn').disabled = !connected;
     // Reset Max is always available (it clears the app-side max readout).
@@ -576,9 +571,7 @@ export class UI {
     $('battery').hidden = false;
     $('batteryPct').textContent = reading.battery;
 
-    // Reflect active unit in the segmented control, and device state in Settings.
-    document.querySelectorAll('#unitSeg .seg-btn').forEach((b) =>
-      b.classList.toggle('active', b.dataset.unit === reading.unit));
+    // Reflect device state in Settings (from the primary's readings).
     if (reading.speedHz === 10 || reading.speedHz === 40) $('setRate').value = String(reading.speedHz);
     if (reading.measureMode === 'N' || reading.measureMode === 'Z')
       $('setZeroMode').value = reading.measureMode === 'N' ? 'abs' : 'rel';
@@ -598,21 +591,46 @@ export class UI {
     if (count < 1) this.toggleDeviceMenu(false);
   }
 
-  // Render the per-channel readout strip: one small card per connected channel
-  // (color swatch, editable label, current value + unit, max, disconnect ×).
-  // chans: [{ id, label, color, current, max, unit }].
+  // Render the per-channel readout strip: one card per connected channel
+  // (color swatch, editable label, current value + unit, max, disconnect ×)
+  // plus a controls row (Zero / Tare / Reset / unit toggle) that drives that
+  // channel's device independently. chans: [{ id, label, color, current, max, unit }].
+  // Render the per-channel cards. This is called on every reading, so the DOM
+  // structure (buttons!) is only rebuilt when the channel set or labels change;
+  // otherwise we just update the live value text. Rebuilding every frame would
+  // recreate the buttons mid-click and they'd never fire.
   renderChannels(chans) {
     const strip = $('channelStrip');
     strip.hidden = chans.length === 0;
+    const sig = chans.map((c) => `${c.id}:${c.label}`).join('|');
+    if (sig !== this._chanSig) { this._buildChannelCards(chans); this._chanSig = sig; }
+    // Update live values (and the unit button) without touching the structure.
+    for (const c of chans) {
+      const refs = this._chanCards && this._chanCards.get(c.id);
+      if (!refs) continue;
+      refs.cur.textContent = c.current.toFixed(2);
+      refs.unitLabel.textContent = c.unit || '';
+      refs.max.textContent = `max ${c.max.toFixed(2)}`;
+      refs.unit = ['kN', 'kgf', 'lbf'].includes(c.unit) ? c.unit : 'kN';
+      refs.unitBtn.textContent = refs.unit;
+    }
+  }
+
+  _buildChannelCards(chans) {
+    const strip = $('channelStrip');
     strip.innerHTML = '';
+    this._chanCards = new Map();
+    const units = ['kN', 'kgf', 'lbf'];
+    const cmdForUnit = { kN: 'UNIT_KN', kgf: 'UNIT_KGF', lbf: 'UNIT_LBF' };
     for (const c of chans) {
       const card = document.createElement('div');
       card.className = 'chan-card';
 
+      const top = document.createElement('div');
+      top.className = 'chan-top';
       const sw = document.createElement('span');
       sw.className = 'chan-swatch';
       sw.style.background = c.color;
-
       const body = document.createElement('div');
       body.className = 'chan-body';
       const label = document.createElement('input');
@@ -622,20 +640,43 @@ export class UI {
       label.onchange = () => this.h.onChannelLabel(c.id, label.value.trim() || c.label);
       const vals = document.createElement('div');
       vals.className = 'chan-vals';
-      vals.innerHTML =
-        `<span class="chan-cur">${c.current.toFixed(2)}</span>` +
-        `<span class="chan-unit">${c.unit || ''}</span>` +
-        `<span class="chan-max">max ${c.max.toFixed(2)}</span>`;
+      const cur = document.createElement('span'); cur.className = 'chan-cur';
+      const unitLabel = document.createElement('span'); unitLabel.className = 'chan-unit';
+      const max = document.createElement('span'); max.className = 'chan-max';
+      vals.append(cur, unitLabel, max);
       body.append(label, vals);
-
       const close = document.createElement('button');
       close.className = 'chan-close';
       close.textContent = '×';
       close.title = 'Disconnect this device';
       close.onclick = () => this.h.onChannelDisconnect(c.id);
+      top.append(sw, body, close);
 
-      card.append(sw, body, close);
+      const ctl = document.createElement('div');
+      ctl.className = 'chan-ctl';
+      const mkBtn = (text, title, fn) => {
+        const b = document.createElement('button');
+        b.className = 'btn btn-sm';
+        b.textContent = text; b.title = title; b.onclick = fn;
+        return b;
+      };
+      const refs = { unit: units.includes(c.unit) ? c.unit : 'kN' };
+      const unitBtn = mkBtn(refs.unit, 'Cycle unit (kN / kgf / lbf)', () => {
+        const nextU = units[(units.indexOf(refs.unit) + 1) % units.length];
+        this.h.onChannelCommand(c.id, cmdForUnit[nextU]);
+      });
+      unitBtn.classList.add('chan-unit-btn');
+      ctl.append(
+        mkBtn('Zero', 'Zero the current reading', () => this.h.onChannelCommand(c.id, 'ZERO')),
+        mkBtn('Tare', 'Set current value as absolute zero', () => this.h.onChannelCommand(c.id, 'SET_ABS_ZERO')),
+        mkBtn('Reset', 'Reset max (and clear the device peak)', () => this.h.onChannelReset(c.id)),
+        unitBtn,
+      );
+
+      card.append(top, ctl);
       strip.append(card);
+      Object.assign(refs, { cur, unitLabel, max, unitBtn });
+      this._chanCards.set(c.id, refs);
     }
   }
 

@@ -39,7 +39,7 @@ async function getSessionActive(id) {
 
 const ui = new UI({
   onConnect, onSimulate, onCommand, onResetMax, onClearGraph,
-  onDisconnectAll, onChannelDisconnect, onChannelLabel,
+  onDisconnectAll, onChannelDisconnect, onChannelLabel, onChannelCommand, onChannelReset,
   onToggleRecord, onSelectSession, onRenameSession, onExportSession, onExportSessionGraph, onDeleteSession,
   onSetting, onDeviceSetting, onPowerOff, onChooseFolder, onRecordFieldChange, onExportGraph,
   onSessionSearch, onSessionSort, onEditSession,
@@ -247,6 +247,30 @@ function onChannelLabel(id, label) {
   ui.setChannels(channels); // updates the graph legend
 }
 
+// Per-channel device command (Zero / Tare / unit change). CLEAR_PEAK also
+// clears that channel's app-side max so the two stay in sync.
+async function onChannelCommand(id, cmd) {
+  const ch = channels.find((c) => c.id === id);
+  if (!ch) return;
+  try {
+    await ch.source.send(cmd);
+    if (cmd === 'CLEAR_PEAK') { ch.max = 0; renderChannelStrip(); }
+  } catch (err) {
+    ui.toast(err.message || 'Command failed', true);
+  }
+}
+
+// Per-channel "reset": clears that channel's app-side max and tells the device
+// to clear its own peak-hold so the two stay in sync.
+function onChannelReset(id) {
+  const ch = channels.find((c) => c.id === id);
+  if (!ch) return;
+  ch.max = 0;
+  if (ch === channels[0]) ui.setMax(0, ch.unit);
+  renderChannelStrip();
+  ch.source.send('CLEAR_PEAK').catch((e) => ui.toast(e.message || 'Reset failed', true));
+}
+
 function handleReading(ch, reading) {
   const isPrimary = ch === channels[0];
   // Reset this channel's max if its unit changed (old max is in the old unit).
@@ -317,21 +341,24 @@ async function onChooseFolder() {
   else ui.toast(`Folder set: ${folderHandle.name}`);
 }
 
-// Device-state settings — sent as BLE commands, only when connected.
+// Device-state settings — sent as BLE commands to EVERY connected device.
 async function onDeviceSetting(key, value) {
-  if (!connection) return;
+  if (!channels.length) return;
+  let cmd = null;
+  if (key === 'rate') cmd = value === '40' ? 'SPEED_40HZ' : 'SPEED_10HZ';
+  else if (key === 'zeroMode') cmd = value === 'abs' ? 'ZERO_MODE_ABS' : 'ZERO_MODE_REL';
+  if (!cmd) return;
   try {
-    if (key === 'rate') await connection.send(value === '40' ? 'SPEED_40HZ' : 'SPEED_10HZ');
-    else if (key === 'zeroMode') await connection.send(value === 'abs' ? 'ZERO_MODE_ABS' : 'ZERO_MODE_REL');
+    await Promise.all(channels.map((c) => c.source.send(cmd)));
   } catch (err) {
     ui.toast(err.message || 'Device command failed', true);
   }
 }
 
 function onPowerOff() {
-  if (!connection) return;
-  if (!confirm('Power off the LineScale 3? It will disconnect.')) return;
-  connection.send('POWER_OFF').catch(() => {});
+  if (!channels.length) return;
+  if (!confirm('Power off all connected devices? They will disconnect.')) return;
+  for (const c of channels) c.source.send('POWER_OFF').catch(() => {});
 }
 
 // ---- recording ------------------------------------------------------------
