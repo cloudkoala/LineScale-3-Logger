@@ -2,7 +2,7 @@
 
 A zero-install web app to connect to a **LineGrip LineScale 3** dynamometer over
 Bluetooth, watch live load, track the max, record named sessions, graph them, and
-export to CSV.
+export data to CSV or PNG graphs.
 
 ![screenshot](docs/screenshot.png)
 
