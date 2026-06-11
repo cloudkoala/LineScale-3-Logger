@@ -10,6 +10,7 @@ const DEFAULTS = {
   autoPauseOnHover: true,     // freeze the live graph while the cursor is over it
   autoSave: false,            // auto-save each recording (CSV + PNG) to a folder
   liveWindowS: 60,            // seconds of history shown on the live graph
+  unit: 'kN',                 // global display unit (kN / kgf / lbf) — all devices forced to match
   // Persistent recording metadata (kept across recordings/reloads).
   testId: '',                 // stays the same across recordings unless changed
   sample: '01',               // auto-increments per recording; resets when testId changes

@@ -57,7 +57,6 @@ export class UI {
     };
     $('simulateBtn').onclick = () => this.h.onSimulate();
 
-    $('resetBtn').onclick = () => this.h.onResetMax();
     $('clearGraphBtn').onclick = () => this.h.onClearGraph();
     $('pauseBtn').onclick = () => this.togglePause();
     $('exportGraphBtn').onclick = () => this.h.onExportGraph();
@@ -108,6 +107,7 @@ export class UI {
     // Device-state inputs send commands via onDeviceSetting(key, value).
     $('setRate').onchange = () => this.h.onDeviceSetting('rate', $('setRate').value);
     $('setZeroMode').onchange = () => this.h.onDeviceSetting('zeroMode', $('setZeroMode').value);
+    $('setUnit').onchange = () => this.h.onSetting('unit', $('setUnit').value);
     $('powerOffBtn').onclick = () => this.h.onPowerOff();
 
     this._buildChart();
@@ -121,6 +121,7 @@ export class UI {
     $('setAutoPause').checked = !!s.autoPauseOnHover;
     $('setAutoSave').checked = !!s.autoSave;
     $('setWindow').value = String(s.liveWindowS);
+    $('setUnit').value = s.unit || 'kN';
     this.setRecordField('testId', s.testId || '');
     this.setRecordField('sample', s.sample || '01');
     this.setRecordField('config', s.config || '');
@@ -544,9 +545,7 @@ export class UI {
     this._devices = devices;
     const n = devices.length;
     const circle = $('connCircle');
-    circle.classList.toggle('conn-empty', n === 0);
-    circle.classList.toggle('conn-on', n > 0);
-    circle.textContent = n > 0 ? String(n) : '';
+    circle.textContent = n > 0 ? String(n) : '+';
     circle.title = n > 0 ? 'Connected devices' : 'Connect a device';
 
     const menu = $('deviceList');
@@ -567,130 +566,140 @@ export class UI {
 
     document.querySelectorAll('.device-setting').forEach((el) => (el.disabled = n === 0));
     $('recordBtn').disabled = n === 0;
-    if (n === 0) { $('battery').hidden = true; $('rate').textContent = '–'; this._toggleDeviceList(false); }
+    if (n === 0) this._toggleDeviceList(false);
   }
 
-  setReading(reading, absValue, showAbs) {
-    this.unit = reading.unit;
-    const shown = showAbs ? absValue : reading.value;
-    $('current').textContent = shown.toFixed(2);
-    $('unit').textContent = reading.unit;
-    $('unitMax').textContent = reading.unit;
-    $('overload').hidden = !reading.overloaded;
-    $('rate').textContent = reading.speedHz ?? '–';
-
-    $('battery').hidden = false;
-    $('batteryPct').textContent = reading.battery;
-
-    // Reflect device state in Settings (from the primary's readings).
+  // Reflect the primary device's live state into the Settings selects (rate +
+  // zero mode). Units are global, so they're not driven from readings here.
+  reflectDeviceState(reading) {
     if (reading.speedHz === 10 || reading.speedHz === 40) $('setRate').value = String(reading.speedHz);
     if (reading.measureMode === 'N' || reading.measureMode === 'Z')
       $('setZeroMode').value = reading.measureMode === 'N' ? 'abs' : 'rel';
   }
 
-  setMax(value, unit) {
-    $('max').textContent = value.toFixed(2);
-    if (unit) $('unitMax').textContent = unit;
-  }
-
-
-  // Render the per-channel readout strip: one card per connected channel
-  // (color swatch, editable label, current value + unit, max, disconnect ×)
-  // plus a controls row (Zero / Tare / Reset / unit toggle) that drives that
-  // channel's device independently. chans: [{ id, label, color, current, max, unit }].
-  // Render the per-channel cards. This is called on every reading, so the DOM
-  // structure (buttons!) is only rebuilt when the channel set or labels change;
+  // Render one large horizontal readout bar per connected device, plus an
+  // add-device bar. Called on every reading, so the DOM structure (buttons,
+  // color pickers!) is only rebuilt when the channel set or labels change;
   // otherwise we just update the live value text. Rebuilding every frame would
-  // recreate the buttons mid-click and they'd never fire.
+  // recreate the controls mid-click and they'd never fire.
+  // chans: [{ id, label, color, kind, current, max, unit, rate, battery, overloaded }].
   renderChannels(chans) {
-    // The strip always shows at least the add-device card; its text depends on
-    // whether any device is connected, so the signature includes the count.
+    // The bars always include the add-device bar; its text depends on whether
+    // any device is connected, so the signature includes the count.
     const sig = chans.length + '#' + chans.map((c) => `${c.id}:${c.label}`).join('|');
-    if (sig !== this._chanSig) { this._buildChannelCards(chans); this._chanSig = sig; }
-    // Update live values (and the unit button) without touching the structure.
+    if (sig !== this._barSig) { this._buildDeviceBars(chans); this._barSig = sig; }
+    // Update live values (current/max/rate/battery/unit) without touching the
+    // structure so the controls stay clickable across ~40 Hz updates.
     for (const c of chans) {
-      const refs = this._chanCards && this._chanCards.get(c.id);
+      const refs = this._bars && this._bars.get(c.id);
       if (!refs) continue;
       refs.cur.textContent = c.current.toFixed(2);
-      refs.unitLabel.textContent = c.unit || '';
-      refs.max.textContent = `max ${c.max.toFixed(2)}`;
-      refs.unit = ['kN', 'kgf', 'lbf'].includes(c.unit) ? c.unit : 'kN';
-      refs.unitBtn.textContent = refs.unit;
+      refs.curUnit.textContent = c.unit || '';
+      refs.max.textContent = c.max.toFixed(2);
+      refs.maxUnit.textContent = c.unit || '';
+      refs.rate.textContent = c.rate ?? '–';
+      refs.batt.textContent = (c.battery ?? '–') + '%';
+      refs.overload.hidden = !c.overloaded;
     }
   }
 
-  _buildChannelCards(chans) {
-    const strip = $('channelStrip');
-    strip.hidden = false;
-    strip.innerHTML = '';
-    this._chanCards = new Map();
+  _buildDeviceBars(chans) {
+    const wrap = $('deviceBars');
+    wrap.innerHTML = '';
+    this._bars = new Map();
 
-    const units = ['kN', 'kgf', 'lbf'];
-    const cmdForUnit = { kN: 'UNIT_KN', kgf: 'UNIT_KGF', lbf: 'UNIT_LBF' };
     for (const c of chans) {
-      const card = document.createElement('div');
-      card.className = 'chan-card';
+      const bar = document.createElement('div');
+      bar.className = 'device-bar';
 
-      const top = document.createElement('div');
-      top.className = 'chan-top';
-      const sw = document.createElement('span');
-      sw.className = 'chan-swatch';
-      sw.style.background = c.color;
-      const body = document.createElement('div');
-      body.className = 'chan-body';
+      // Left: color swatch (color picker) + editable name + device type.
+      const ident = document.createElement('div');
+      ident.className = 'dev-ident';
+      const sw = document.createElement('input');
+      sw.type = 'color';
+      sw.className = 'dev-swatch';
+      sw.value = c.color;
+      sw.title = 'Line color';
+      sw.oninput = () => this.h.onChannelColor(c.id, sw.value);
+      const idText = document.createElement('div');
+      idText.className = 'dev-idtext';
       const label = document.createElement('input');
-      label.className = 'chan-label';
+      label.className = 'dev-name';
       label.value = c.label;
-      label.title = 'Rename channel';
+      label.title = 'Rename device';
       label.onchange = () => this.h.onChannelLabel(c.id, label.value.trim() || c.label);
-      const vals = document.createElement('div');
-      vals.className = 'chan-vals';
-      const cur = document.createElement('span'); cur.className = 'chan-cur';
-      const unitLabel = document.createElement('span'); unitLabel.className = 'chan-unit';
-      const max = document.createElement('span'); max.className = 'chan-max';
-      vals.append(cur, unitLabel, max);
-      body.append(label, vals);
-      const close = document.createElement('button');
-      close.className = 'chan-close';
-      close.textContent = '×';
-      close.title = 'Disconnect this device';
-      close.onclick = () => this.h.onChannelDisconnect(c.id);
-      top.append(sw, body, close);
+      const kind = document.createElement('div');
+      kind.className = 'dev-kind';
+      kind.textContent = c.kind || '';
+      idText.append(label, kind);
+      ident.append(sw, idText);
 
+      // Big readouts: CURRENT, MAX, RATE, battery.
+      const readouts = document.createElement('div');
+      readouts.className = 'dev-readouts';
+      const mkRO = (cls, labelTxt) => {
+        const box = document.createElement('div');
+        box.className = 'dev-ro ' + cls;
+        const lab = document.createElement('div'); lab.className = 'dev-ro-label'; lab.textContent = labelTxt;
+        const val = document.createElement('div'); val.className = 'dev-ro-value';
+        box.append(lab, val);
+        return { box, val };
+      };
+      const curRO = mkRO('dev-ro-cur', 'Current');
+      const cur = document.createElement('span'); cur.className = 'dev-cur-num';
+      const curUnit = document.createElement('span'); curUnit.className = 'unit';
+      curRO.val.append(cur, curUnit);
+      const overload = document.createElement('div'); overload.className = 'overload'; overload.textContent = '⚠ OVERLOAD'; overload.hidden = true;
+      curRO.box.append(overload);
+
+      const maxRO = mkRO('dev-ro-max', 'Max');
+      const max = document.createElement('span'); max.className = 'dev-max-num';
+      const maxUnit = document.createElement('span'); maxUnit.className = 'unit unit-sm';
+      maxRO.val.append(max, maxUnit);
+
+      const rateRO = mkRO('dev-ro-rate', 'Rate');
+      const rate = document.createElement('span'); rate.className = 'dev-rate-num';
+      rateRO.val.append(rate, document.createTextNode(' Hz'));
+
+      const battRO = mkRO('dev-ro-batt', 'Battery');
+      const batt = document.createElement('span'); batt.className = 'dev-batt-num';
+      battRO.val.append(batt);
+
+      readouts.append(curRO.box, maxRO.box, rateRO.box, battRO.box);
+
+      // Controls: Zero / Tare / Reset + disconnect ×.
       const ctl = document.createElement('div');
-      ctl.className = 'chan-ctl';
+      ctl.className = 'dev-ctl';
       const mkBtn = (text, title, fn) => {
         const b = document.createElement('button');
         b.className = 'btn btn-sm';
         b.textContent = text; b.title = title; b.onclick = fn;
         return b;
       };
-      const refs = { unit: units.includes(c.unit) ? c.unit : 'kN' };
-      const unitBtn = mkBtn(refs.unit, 'Cycle unit (kN / kgf / lbf)', () => {
-        const nextU = units[(units.indexOf(refs.unit) + 1) % units.length];
-        this.h.onChannelCommand(c.id, cmdForUnit[nextU]);
-      });
-      unitBtn.classList.add('chan-unit-btn');
+      const close = document.createElement('button');
+      close.className = 'dev-close';
+      close.textContent = '×';
+      close.title = 'Disconnect this device';
+      close.onclick = () => this.h.onChannelDisconnect(c.id);
       ctl.append(
         mkBtn('Zero', 'Zero the current reading', () => this.h.onChannelCommand(c.id, 'ZERO')),
         mkBtn('Tare', 'Set current value as absolute zero', () => this.h.onChannelCommand(c.id, 'SET_ABS_ZERO')),
         mkBtn('Reset', 'Reset max (and clear the device peak)', () => this.h.onChannelReset(c.id)),
-        unitBtn,
+        close,
       );
 
-      card.append(top, ctl);
-      strip.append(card);
-      Object.assign(refs, { cur, unitLabel, max, unitBtn });
-      this._chanCards.set(c.id, refs);
+      bar.append(ident, readouts, ctl);
+      wrap.append(bar);
+      this._bars.set(c.id, { cur, curUnit, max, maxUnit, rate, batt, overload });
     }
 
-    // Add-device card, to the right of any connected devices. Text depends on
-    // whether anything is connected yet.
+    // Add-device bar, after the connected devices. Text depends on whether
+    // anything is connected yet.
     const add = document.createElement('button');
-    add.className = 'chan-add';
-    add.innerHTML = `<span class="chan-add-icon">+</span><span class="chan-add-text">${chans.length ? 'Add Additional Device' : 'Connect Device'}</span>`;
+    add.className = 'dev-add';
+    add.innerHTML = `<span class="dev-add-icon">+</span><span class="dev-add-text">${chans.length ? 'Add Additional Device' : 'Connect Device'}</span>`;
     add.onclick = () => this.h.onConnect();
-    strip.append(add);
+    wrap.append(add);
   }
 
   setRecordingState(isRecording) {

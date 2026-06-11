@@ -15,9 +15,11 @@ const store = new Store();
 // settings, and (for this stage) recording. `connection` always mirrors the
 // primary source so the existing primary-only code keeps working.
 const CHAN_COLORS = ['#3fb6ff', '#ffb020', '#2ec36a', '#ff5252', '#b06fff', '#ff8f3f'];
-let channels = [];     // [{ id, source, label, color, unit, current, max, name }]
+const UNIT_CMD = { kN: 'UNIT_KN', kgf: 'UNIT_KGF', lbf: 'UNIT_LBF' };
+let channels = [];     // [{ id, source, label, color, kind, unit, current, max, rate, battery, overloaded, name }]
 let connection = null; // = channels[0]?.source
 let nextChanId = 1;
+let deviceSeq = 0;     // running count of devices added, for default names
 let sampleTimer = null; // shared ~33 ms live-graph sampler
 
 let activeSessionId = null;
@@ -38,8 +40,8 @@ async function getSessionActive(id) {
 }
 
 const ui = new UI({
-  onConnect, onSimulate, onCommand, onResetMax, onClearGraph,
-  onDisconnectAll, onChannelDisconnect, onChannelLabel, onChannelCommand, onChannelReset,
+  onConnect, onSimulate, onClearGraph,
+  onDisconnectAll, onChannelDisconnect, onChannelLabel, onChannelCommand, onChannelReset, onChannelColor,
   onToggleRecord, onSelectSession, onRenameSession, onExportSession, onExportSessionGraph, onDeleteSession,
   onSetting, onDeviceSetting, onPowerOff, onChooseFolder, onRecordFieldChange, onExportGraph,
   onSessionSearch, onSessionSort, onEditSession,
@@ -139,12 +141,14 @@ async function main() {
 async function addChannel(source) {
   const id = nextChanId++;
   const idx = channels.length;
+  const kind = source instanceof Simulator ? 'Simulated device' : 'LineScale 3';
+  const n = ++deviceSeq; // single-digit device number for the default name
   const ch = {
     id, source,
-    label: `Channel ${idx + 1}`,
+    label: `${kind} #${n}`,
     color: CHAN_COLORS[idx % CHAN_COLORS.length],
-    kind: source instanceof Simulator ? 'Simulated device' : 'LineScale 3',
-    unit: null, current: 0, max: 0, name: '',
+    kind,
+    unit: null, current: 0, max: 0, rate: null, battery: null, overloaded: false, name: '',
   };
   channels.push(ch);
   if (channels.length === 1) connection = source; // first device is the primary
@@ -163,6 +167,9 @@ async function addChannel(source) {
   startSampler();
   try {
     await source.connect();
+    // Force the new device to the global unit so all devices match.
+    const cmd = UNIT_CMD[settings.unit] || 'UNIT_KN';
+    source.send(cmd).catch(() => {});
   } catch (err) {
     removeChannel(ch); // connect failed — undo the half-added channel
     ui.toast(err.message || 'Connection failed', true);
@@ -175,7 +182,7 @@ function onChannelStatus(ch, s) {
     if (isPrimary) ui.resetDiag();
   } else if (s.state === 'connected') {
     ch.name = s.name || 'LineScale 3';
-    if (isPrimary) { ch.max = 0; ch.unit = null; ui.setMax(0); }
+    if (isPrimary) { ch.max = 0; ch.unit = null; }
     refreshDeviceUI();
   } else if (s.state === 'disconnected') {
     removeChannel(ch);
@@ -205,8 +212,9 @@ function refreshDeviceUI() {
 
 function renderChannelStrip() {
   ui.renderChannels(channels.map((c) => ({
-    id: c.id, label: c.label, color: c.color,
+    id: c.id, label: c.label, color: c.color, kind: c.kind,
     current: c.current, max: c.max, unit: c.unit || '',
+    rate: c.rate, battery: c.battery, overloaded: c.overloaded,
   })));
 }
 
@@ -266,9 +274,18 @@ function onChannelReset(id) {
   const ch = channels.find((c) => c.id === id);
   if (!ch) return;
   ch.max = 0;
-  if (ch === channels[0]) ui.setMax(0, ch.unit);
   renderChannelStrip();
   ch.source.send('CLEAR_PEAK').catch((e) => ui.toast(e.message || 'Reset failed', true));
+}
+
+// Change a channel's line color (from its bar's swatch picker): update state,
+// recolor the chart line, and re-render the bars.
+function onChannelColor(id, color) {
+  const ch = channels.find((c) => c.id === id);
+  if (!ch) return;
+  ch.color = color;
+  ui.setChannels(channels); // recolor the chart line
+  renderChannelStrip();      // update the swatch
 }
 
 function handleReading(ch, reading) {
@@ -280,35 +297,17 @@ function handleReading(ch, reading) {
   const abs = absoluteForce(reading);
   if (reading.value > ch.max) ch.max = reading.value;
   ch.current = reading.value;
+  ch.rate = reading.speedHz ?? null;
+  ch.battery = reading.battery;
+  ch.overloaded = !!reading.overloaded;
 
-  if (isPrimary) {
-    ui.setReading(reading, abs, false);
-    ui.setMax(ch.max, reading.unit);
-  }
+  // Reflect the primary device's rate/zero-mode into the Settings selects.
+  if (isPrimary) ui.reflectDeviceState(reading);
   // Record every channel that was present when recording started.
   if (store.recording && recChanIndex.has(ch.id)) {
     store.appendChannel(recChanIndex.get(ch.id), reading, abs);
   }
   renderChannelStrip();
-}
-
-async function onCommand(cmdName) {
-  if (!connection) return;
-  try {
-    await connection.send(cmdName);
-    if (cmdName === 'CLEAR_PEAK' && channels[0]) channels[0].max = 0; // mirror the device peak clear
-  } catch (err) {
-    ui.toast(err.message || 'Command failed', true);
-  }
-}
-
-// Single "reset": clears the primary's app-side max and, if connected, tells
-// the device to clear its own peak-hold so the two stay in sync.
-function onResetMax() {
-  if (channels[0]) channels[0].max = 0;
-  ui.setMax(0, channels[0]?.unit);
-  renderChannelStrip();
-  if (connection) connection.send('CLEAR_PEAK').catch((e) => ui.toast(e.message || 'Reset failed', true));
 }
 
 function onClearGraph() { ui.clearLive(); }
@@ -322,6 +321,12 @@ async function onSetting(key, value) {
   if (key === 'debug') ui.toggleDebug(value);
   if (key === 'autoPauseOnHover') ui.setAutoPause(value);
   if (key === 'liveWindowS') ui.setLiveWindow(value);
+  // Global unit: force every connected device to the chosen unit.
+  if (key === 'unit') {
+    const cmd = UNIT_CMD[value] || 'UNIT_KN';
+    try { await Promise.all(channels.map((c) => c.source.send(cmd))); }
+    catch (err) { ui.toast(err.message || 'Unit change failed', true); }
+  }
   // Switching the session library on/off (folder vs browser storage).
   if (key === 'autoSave') {
     if (value) { if (folderHandle) await activateFolder(); else await onChooseFolder(); }

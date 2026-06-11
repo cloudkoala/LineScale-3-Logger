@@ -11,9 +11,8 @@
   <header class="topbar">
     <h1>LineScale&nbsp;3 <span class="muted">Logger</span></h1>
     <div class="topbar-right">
-      <span id="battery" class="pill pill-muted" hidden>🔋 <span id="batteryPct">–</span>%</span>
       <div class="conn-wrap">
-        <button id="connCircle" class="conn-circle conn-empty" title="Connect a device" aria-label="Connect a device"></button>
+        <button id="connCircle" class="conn-circle" title="Connect a device" aria-label="Connect a device">+</button>
         <div id="deviceList" class="device-list-menu" hidden></div>
       </div>
       <div class="settings-wrap">
@@ -53,6 +52,13 @@
                 <option value="abs">Absolute</option>
               </select>
             </label>
+            <label class="setting"><span>Units</span>
+              <select id="setUnit" data-setting="unit">
+                <option value="kN">kN</option>
+                <option value="kgf">kgf</option>
+                <option value="lbf">lbf</option>
+              </select>
+            </label>
             <button id="powerOffBtn" class="btn device-setting" disabled>Power off device</button>
           </div>
           <div class="settings-section" id="simulateSection">
@@ -64,24 +70,7 @@
   </header>
 
   <main>
-    <section class="readouts">
-      <div class="readout readout-main">
-        <div class="readout-label">Current</div>
-        <div class="readout-value"><span id="current">0.00</span><span id="unit" class="unit">kN</span></div>
-        <div id="overload" class="overload" hidden>⚠ OVERLOAD</div>
-      </div>
-      <div class="readout readout-max-box">
-        <div class="readout-label">Max</div>
-        <div class="readout-value readout-max"><span id="max">0.00</span><span class="unit unit-sm" id="unitMax">kN</span></div>
-        <button id="resetBtn" class="reset-link" title="Reset max (and clear the device peak)">reset</button>
-      </div>
-      <div class="readout">
-        <div class="readout-label">Rate</div>
-        <div class="readout-value readout-sm"><span id="rate">–</span> Hz</div>
-      </div>
-    </section>
-
-    <section id="channelStrip" class="channel-strip" hidden></section>
+    <section id="deviceBars" class="device-bars"></section>
 
     <section class="record-bar">
       <div class="field-group">
@@ -113,18 +102,19 @@
 
     <section class="chart-wrap">
       <div class="chart-header">
-        <div id="chartId" class="chart-id">Live</div>
+        <div class="chart-ctrl-left">
+          <button id="liveBtn" class="btn" hidden>← Back to Live</button>
+          <button id="pauseBtn" class="btn">⏸ Pause</button>
+        </div>
         <div class="chart-meta">
           <div id="chartConfig" class="chart-config"></div>
           <div id="chartMaterial" class="chart-material"></div>
         </div>
-        <div></div>
+        <div id="chartId" class="chart-id">Live</div>
       </div>
       <div id="pauseBadge" class="pause-badge" hidden>⏸ Paused — move cursor off graph to resume</div>
       <div id="chart"></div>
       <div class="chart-footer">
-        <button id="liveBtn" class="btn" hidden>← Back to Live</button>
-        <button id="pauseBtn" class="btn">⏸ Pause</button>
         <button id="clearGraphBtn" class="btn">Clear</button>
         <button id="exportGraphBtn" class="btn btn-icon" title="Share / export graph">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
