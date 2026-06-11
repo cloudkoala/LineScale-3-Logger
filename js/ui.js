@@ -21,6 +21,8 @@ function stepTrailingNumber(str, delta) {
 const $ = (id) => document.getElementById(id);
 
 const TRASH_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>';
+const SHARE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>';
+const PENCIL_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>';
 
 export class UI {
   constructor(handlers) {
@@ -37,6 +39,7 @@ export class UI {
     this.autoPause = true;  // freeze live graph while cursor is over it?
     this.hoverPaused = false;// currently frozen because the cursor is over the chart
     this.sessionName = null;// name of the session being viewed, if any
+    this.liveHeader = { id: 'Live', config: '', material: '' }; // live chart header
   }
 
   init() {
@@ -90,6 +93,7 @@ export class UI {
     document.addEventListener('click', (e) => {
       if (!$('settingsPanel').hidden && !e.target.closest('.settings-wrap')) this.toggleSettings(false);
       if (!$('deviceMenu').hidden && !e.target.closest('.device-wrap')) this.toggleDeviceMenu(false);
+      if (!e.target.closest('.share-wrap')) document.querySelectorAll('.share-menu').forEach((m) => { m.hidden = true; });
     });
     // App-pref inputs report changes via onSetting(key, value).
     $('setDebug').onchange = () => this.h.onSetting('debug', $('setDebug').checked);
@@ -176,11 +180,12 @@ export class UI {
     // Auto-pause: freeze the live graph while the cursor is over it so the
     // trace doesn't scroll out from under the pointer.
     this.chart.over.addEventListener('mouseenter', () => {
-      if (this.autoPause && this.viewMode === 'live') this.hoverPaused = true;
+      if (this.autoPause && this.viewMode === 'live') { this.hoverPaused = true; this._setPauseBadge(true); }
     });
     this.chart.over.addEventListener('mouseleave', () => {
       if (this.hoverPaused) {
         this.hoverPaused = false;
+        this._setPauseBadge(false);
         if (this.viewMode === 'live' && !this.paused) this._queueRedraw();
       }
     });
@@ -190,6 +195,7 @@ export class UI {
     this.autoPause = on;
     if (!on && this.hoverPaused) {
       this.hoverPaused = false;
+      this._setPauseBadge(false);
       if (this.viewMode === 'live' && !this.paused) this._queueRedraw();
     }
   }
@@ -258,26 +264,47 @@ export class UI {
     });
   }
 
+  // Header zones: Test ID-Sample (top-left), Configuration + Material (centered).
+  _renderHeader({ id, config, material }) {
+    $('chartId').textContent = id || '';
+    $('chartConfig').textContent = config || '';
+    $('chartMaterial').textContent = material || '';
+  }
+
   showSession(rec) {
     this.viewMode = 'session';
     this.unit = rec.unit;
     this.sessionName = rec.name;
+    this._setPauseBadge(false);
     const xs = rec.samples.map((s) => s.t / 1000);
     const ys = rec.samples.map((s) => s.value);
     this.chart.setData([xs.length ? xs : [0], ys.length ? ys : [0]]);
-    const idLine = [rec.config, matStr(rec.material)].filter(Boolean).join(' / ');
-    $('chartTitle').textContent = `${rec.name}${idLine ? ' — ' + idLine : ''} · max ${rec.max.toFixed(2)} ${rec.unit}`;
+    this._renderHeader({ id: rec.name, config: rec.config, material: matStr(rec.material) });
     $('liveBtn').hidden = false;
+    // In a saved session, only Back-to-Live + Export apply.
+    $('pauseBtn').hidden = true;
+    $('clearGraphBtn').hidden = true;
   }
 
   showLive() {
     this.viewMode = 'live';
     this.sessionName = null;
-    $('chartTitle').textContent = 'Live';
+    this._renderHeader(this.liveHeader);
     $('liveBtn').hidden = true;
+    $('pauseBtn').hidden = false;
+    $('clearGraphBtn').hidden = false;
     this.chart.setData([this.lx.length ? this.lx : [0], this.ly.length ? this.ly : [0]]);
     this.h.onSelectSession(null);
   }
+
+  // Live header (Test ID-Sample + config/material). Applied only while viewing
+  // the live feed, so it doesn't overwrite a loaded session's header.
+  setLiveHeader(obj) {
+    this.liveHeader = obj || { id: 'Live', config: '', material: '' };
+    if (this.viewMode === 'live') this._renderHeader(this.liveHeader);
+  }
+
+  _setPauseBadge(on) { $('pauseBadge').hidden = !on; }
 
   clearLive() {
     this.lx = []; this.ly = []; this.t0 = null;
@@ -304,7 +331,11 @@ export class UI {
     const map = { testId: 'recTestId', sample: 'recSample', config: 'recConfig' };
     if (map[key]) $(map[key]).value = val;
   }
-  setMaterialOptions(options) { this.materialSelect.setOptions(options); }
+  setMaterialOptions(options) {
+    this._materialOptions = options;
+    this.materialSelect.setOptions(options);
+    if (this.editMaterialSelect) this.editMaterialSelect.setOptions(options);
+  }
 
   // Render the given series to a standalone PNG and download it. Used by the
   // chart's Export button and per-session graph export (no loading).
@@ -485,8 +516,8 @@ export class UI {
     for (const s of list) {
       const li = document.createElement('li');
       li.className = 'session-item' + (s.id === activeId ? ' active' : '');
-      li.title = 'Click to view';
-      li.onclick = () => this.h.onSelectSession(s.id);
+      li.title = s.id === activeId ? 'Click to deselect' : 'Click to view';
+      li.onclick = () => (s.id === activeId ? this.showLive() : this.h.onSelectSession(s.id));
       const d = new Date(s.startedAt);
 
       // Date / time (two lines).
@@ -509,8 +540,8 @@ export class UI {
       const actions = document.createElement('div');
       actions.className = 'session-actions';
       actions.append(
-        this._iconBtn('Graph', () => this.h.onExportSessionGraph(s.id)),
-        this._iconBtn('CSV', () => this.h.onExportSession(s.id)),
+        this._iconBtn(PENCIL_SVG, () => this.h.onEditSession(s.id), false, { html: true, title: 'Edit' }),
+        this._shareMenu(s.id),
         this._iconBtn(TRASH_SVG, () => this.h.onDeleteSession(s.id), true, { html: true, title: 'Delete' }),
       );
 
@@ -562,6 +593,32 @@ export class UI {
     });
   }
 
+  // Edit a session's metadata. Resolves to {testId, sample, config, material} or null.
+  openEditModal(rec) {
+    return new Promise((resolve) => {
+      if (!this.editMaterialSelect) {
+        this.editMaterialSelect = new MultiSelect($('editMaterial'), {});
+      }
+      this.editMaterialSelect.setOptions(this._materialOptions || []);
+      this.editMaterialSelect.setValues(rec.material);
+      $('editTestId').value = rec.testId || '';
+      $('editSample').value = rec.sample || '';
+      $('editConfig').value = rec.config || '';
+      const modal = $('editModal');
+      modal.hidden = false;
+      $('editTestId').focus();
+      const save = $('editSave'), cancel = $('editCancel');
+      const done = (val) => { modal.hidden = true; save.onclick = cancel.onclick = null; resolve(val); };
+      save.onclick = () => done({
+        testId: $('editTestId').value.trim(),
+        sample: $('editSample').value.trim(),
+        config: $('editConfig').value.trim(),
+        material: this.editMaterialSelect.getValues(),
+      });
+      cancel.onclick = () => done(null);
+    });
+  }
+
   _iconBtn(label, fn, danger, opts = {}) {
     const b = document.createElement('button');
     b.className = 'icon-btn' + (danger ? ' danger' : '') + (opts.html ? ' icon-btn-svg' : '');
@@ -569,6 +626,34 @@ export class UI {
     if (opts.title) b.title = opts.title;
     b.onclick = (e) => { e.stopPropagation(); fn(); };
     return b;
+  }
+
+  // A share icon that opens a small menu to download the session's PNG / CSV.
+  _shareMenu(id) {
+    const wrap = document.createElement('div');
+    wrap.className = 'share-wrap';
+    wrap.onclick = (e) => e.stopPropagation(); // don't select the row
+    const btn = this._iconBtn(SHARE_SVG, () => {}, false, { html: true, title: 'Share / download' });
+    const menu = document.createElement('div');
+    menu.className = 'share-menu';
+    menu.hidden = true;
+    const item = (label, fn) => {
+      const b = document.createElement('button');
+      b.textContent = label;
+      b.onclick = () => { menu.hidden = true; fn(); };
+      return b;
+    };
+    menu.append(
+      item('Download graph (PNG)', () => this.h.onExportSessionGraph(id)),
+      item('Download CSV', () => this.h.onExportSession(id)),
+    );
+    btn.onclick = () => {
+      const open = menu.hidden;
+      document.querySelectorAll('.share-menu').forEach((m) => { m.hidden = true; });
+      menu.hidden = !open;
+    };
+    wrap.append(btn, menu);
+    return wrap;
   }
 
   toast(msg, isErr) {

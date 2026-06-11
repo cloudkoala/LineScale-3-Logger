@@ -29,7 +29,7 @@ const ui = new UI({
   onConnectToggle, onSimulate, onCommand, onResetMax, onClearGraph,
   onToggleRecord, onSelectSession, onRenameSession, onExportSession, onExportSessionGraph, onDeleteSession,
   onSetting, onDeviceSetting, onPowerOff, onChooseFolder, onRecordFieldChange, onExportGraph,
-  onSessionSearch, onSessionSort,
+  onSessionSearch, onSessionSort, onEditSession,
 });
 
 let allSessions = [];          // full session summary list (unfiltered)
@@ -44,6 +44,15 @@ function idLabel(testId, sample) {
 function fmtDateTime(ms) { try { return new Date(ms).toLocaleString(); } catch { return ''; } }
 // Material is a list; join for display on graphs.
 function matStr(m) { return Array.isArray(m) ? m.join(', ') : (m || ''); }
+
+// Live chart header from the current record metadata.
+function updateLiveTitle() {
+  ui.setLiveHeader({
+    id: idLabel(settings.testId, settings.sample) || 'Live',
+    config: settings.config || '',
+    material: matStr(settings.material),
+  });
+}
 
 // Graph annotation metadata for a saved recording / for the live view.
 function metaForRec(rec) {
@@ -77,6 +86,7 @@ async function main() {
   // Build the UI first so the app renders immediately, independent of storage.
   ui.init();
   ui.initSettings(settings);
+  updateLiveTitle();
   ui.setFsSupported(fs.fsSupported());
   // ?sim=1 auto-starts the simulated device — do this before any storage await
   // so the live UI never waits on IndexedDB.
@@ -233,6 +243,7 @@ async function onToggleRecord(fields) {
     config: fields.config, material: fields.material,
   });
   saveSettings();
+  updateLiveTitle();
 
   store.startRecording({
     testId: fields.testId, sample: fields.sample, config: fields.config, material: fields.material,
@@ -286,6 +297,7 @@ function advanceSample() {
   const n = parseInt(settings.sample, 10);
   const next = String((Number.isFinite(n) ? n : 0) + 1).padStart(2, '0');
   settings.sample = next; saveSettings(); ui.setRecordField('sample', next);
+  updateLiveTitle();
 }
 
 // Write a finished recording's CSV + PNG to the chosen folder. Falls back to a
@@ -393,36 +405,23 @@ async function onRenameSession(id, name) {
   await refreshSessions();
 }
 
-// Open an already-saved file from the folder in a new browser tab (no
-// download). A web app can't hand it to an OS app, so this is the closest.
-// Opens a blank tab synchronously (within the click gesture) to dodge popup
-// blocking, then points it at the file. Returns false if the file is absent.
-async function openSessionFile(base, ext, isImage) {
-  const win = window.open('', '_blank');
-  try {
-    const file = await fs.readFileBlob(folderHandle, `${base}.${ext}`);
-    const blob = isImage ? file : new Blob([await file.text()], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    if (win) win.location.href = url; else window.open(url, '_blank');
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-    return true;
-  } catch {
-    if (win) win.close();
-    return false;
-  }
-}
-
-// CSV icon: open the file in folder mode, else download a copy.
+// Download a copy of the session's CSV (the saved file in folder mode, else
+// generated from the record).
 async function onExportSession(id) {
-  if (usingFolder() && (await openSessionFile(id, 'csv', false))) return;
+  if (usingFolder()) {
+    try { ui._download(await fs.readFileBlob(folderHandle, `${id}.csv`), `${id}.csv`); return; } catch { /* fall through */ }
+  }
   const rec = await getSessionActive(id);
   if (!rec) return;
   ui._download(new Blob([recordingToCSV(rec)], { type: 'text/csv' }), `${ui._safeName(rec.name)}.csv`);
 }
 
-// Graph icon: open the saved PNG in folder mode, else render + download one.
+// Download a copy of the session's graph PNG (the saved file in folder mode,
+// else rendered from the record).
 async function onExportSessionGraph(id) {
-  if (usingFolder() && (await openSessionFile(id, 'png', true))) return;
+  if (usingFolder()) {
+    try { ui._download(await fs.readFileBlob(folderHandle, `${id}.png`), `${id}.png`); return; } catch { /* fall through */ }
+  }
   const rec = await getSessionActive(id);
   if (!rec || !rec.samples.length) { ui.toast('No data in this session', true); return; }
   ui.exportGraphPNG({
@@ -431,6 +430,34 @@ async function onExportSessionGraph(id) {
     unit: rec.unit,
     ...metaForRec(rec),
   });
+}
+
+// Edit a saved session's Test ID / Sample / Material / Config.
+async function onEditSession(id) {
+  const rec = await getSessionActive(id);
+  if (!rec) return;
+  const edited = await ui.openEditModal(rec);
+  if (!edited) return;
+  rec.testId = edited.testId;
+  rec.sample = edited.sample;
+  rec.config = edited.config;
+  rec.material = edited.material;
+  rec.name = idLabel(rec.testId, rec.sample) || rec.name;
+
+  if (usingFolder()) {
+    if (!(await folderGranted(true))) { ui.toast('Folder not authorized', true); return; }
+    try {
+      const csvBlob = new Blob([recordingToCSV(rec)], { type: 'text/csv' });
+      let pngBlob = null;
+      try { pngBlob = await graphBlobFor(rec); } catch { /* csv only */ }
+      await fs.deleteSession(folderHandle, id); // remove old files (name may change)
+      await fs.saveFiles(folderHandle, rec.name, pngBlob ? { csv: csvBlob, png: pngBlob } : { csv: csvBlob });
+    } catch (e) { ui.toast('Edit save failed: ' + (e.message || e), true); }
+  } else {
+    await store.persist(rec); // IndexedDB id unchanged
+  }
+  if (activeSessionId === id) { activeSessionId = null; ui.showLive(); }
+  await refreshSessions();
 }
 
 // Export the live view (or delegate to the loaded session's export).
@@ -449,6 +476,7 @@ function onRecordFieldChange(key, value) {
   if (key === 'testId') { settings.sample = '01'; ui.setRecordField('sample', '01'); }
   saveSettings();
   if (key === 'testId' || key === 'sample') checkDuplicate();
+  updateLiveTitle();
 }
 
 // Warn when the current Test ID-Sample already names a saved session.

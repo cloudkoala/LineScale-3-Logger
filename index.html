@@ -129,15 +129,22 @@
 
     <section class="chart-wrap">
       <div class="chart-header">
-        <div id="chartTitle" class="chart-title">Live</div>
-        <span class="spacer"></span>
-        <button id="liveBtn" class="btn" hidden>← Back to Live</button>
-        <button id="pauseBtn" class="btn">⏸ Pause</button>
-        <button id="clearGraphBtn" class="btn">Clear graph</button>
-        <button id="exportGraphBtn" class="btn">⤓ Export</button>
+        <div id="chartId" class="chart-id">Live</div>
+        <div class="chart-meta">
+          <div id="chartConfig" class="chart-config"></div>
+          <div id="chartMaterial" class="chart-material"></div>
+        </div>
+        <div></div>
       </div>
+      <div id="pauseBadge" class="pause-badge" hidden>⏸ Paused — move cursor off graph to resume</div>
       <div id="chart"></div>
       <div class="chart-footer">
+        <button id="liveBtn" class="btn" hidden>← Back to Live</button>
+        <button id="pauseBtn" class="btn">⏸ Pause</button>
+        <button id="clearGraphBtn" class="btn">Clear</button>
+        <button id="exportGraphBtn" class="btn btn-icon" title="Share / export graph">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
+        </button>
         <span class="spacer"></span>
         <button id="recordBtn" class="btn btn-record" disabled>● Start Recording</button>
       </div>
@@ -184,6 +191,22 @@
       <div class="modal-actions">
         <button id="nameModalCancel" class="btn">Skip</button>
         <button id="nameModalSave" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="editModal" class="modal" hidden>
+    <div class="modal-card modal-card-wide">
+      <h3>Edit session</h3>
+      <div class="edit-grid">
+        <div class="field field-testid"><label for="editTestId">Test ID</label><input id="editTestId" type="text" /></div>
+        <div class="field field-sample"><label for="editSample">Sample</label><input id="editSample" type="text" /></div>
+        <div class="field"><label for="editConfig">Configuration</label><input id="editConfig" type="text" /></div>
+        <div class="field"><label>Material</label><div id="editMaterial"></div></div>
+      </div>
+      <div class="modal-actions">
+        <button id="editCancel" class="btn">Cancel</button>
+        <button id="editSave" class="btn btn-primary">Save</button>
       </div>
     </div>
   </div>
