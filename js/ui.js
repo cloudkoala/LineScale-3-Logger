@@ -731,8 +731,12 @@ export class UI {
   setRecordingState(isRecording) {
     const btn = $('recordBtn');
     btn.classList.toggle('recording', isRecording);
-    btn.textContent = isRecording ? '■ Stop Recording' : '● Start Recording';
+    btn.innerHTML = isRecording ? '■ Stop Recording' : '<span class="rec-dot">●</span> Start Recording';
+    // Red outlines on the graph + device bars while a recording is active.
+    document.body.classList.toggle('is-recording', isRecording);
+    // Grey out / lock the recording metadata inputs (incl. the +/- steppers).
     ['recTestId', 'recSample', 'recConfig'].forEach((id) => { $(id).disabled = isRecording; });
+    document.querySelectorAll('.record-bar .step').forEach((b) => { b.disabled = isRecording; });
     this.materialSelect.setDisabled(isRecording);
   }
 

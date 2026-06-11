@@ -64,8 +64,15 @@ main {
 .btn:disabled { opacity: .4; cursor: not-allowed; }
 .btn-primary { background: var(--accent-2); border-color: var(--accent-2); color: #fff; }
 .btn-primary:hover:not(:disabled) { background: var(--accent); }
-.btn-record { border-color: var(--red); color: var(--red); font-weight: 600; }
+.btn-record { border-color: var(--red); color: #fff; font-weight: 600; }
+.btn-record .rec-dot { color: var(--red); }
 .btn-record.recording { background: var(--red); color: #fff; }
+
+/* Active-recording cues: red outlines (same width) + locked, greyed metadata inputs */
+body.is-recording .chart-wrap,
+body.is-recording .device-bar { border-color: var(--red); }
+.record-bar input:disabled { opacity: .45; cursor: not-allowed; }
+.record-bar .step:disabled { opacity: .4; cursor: not-allowed; }
 .btn-icon { display: inline-flex; align-items: center; justify-content: center; padding: 8px 12px; }
 .btn-icon svg { width: 16px; height: 16px; display: block; }
 
