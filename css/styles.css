@@ -101,6 +101,32 @@ main {
 }
 .reset-link:hover { color: var(--accent); }
 
+/* Per-channel readout strip (one card per connected device) */
+.channel-strip { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.chan-card {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: 12px; padding: 10px 12px; min-width: 220px;
+}
+.chan-swatch { width: 12px; height: 12px; border-radius: 3px; flex: none; }
+.chan-body { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.chan-label {
+  background: none; border: 1px solid transparent; color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600; padding: 1px 4px;
+  border-radius: 5px; width: 110px; max-width: 110px;
+}
+.chan-label:hover { border-color: var(--border); }
+.chan-label:focus { outline: none; border-color: var(--accent); background: var(--panel-2); }
+.chan-vals { font-variant-numeric: tabular-nums; font-size: 15px; }
+.chan-vals .chan-cur { font-weight: 700; }
+.chan-vals .chan-unit { color: var(--muted); font-size: 12px; margin-left: 3px; }
+.chan-vals .chan-max { color: var(--amber); margin-left: 8px; }
+.chan-close {
+  margin-left: auto; background: none; border: none; color: var(--muted);
+  font-size: 18px; line-height: 1; cursor: pointer; padding: 2px 6px; border-radius: 6px;
+}
+.chan-close:hover { color: #fff; background: var(--red); }
+
 /* Controls */
 .controls {
   display: flex; gap: 26px; flex-wrap: wrap; align-items: center;

@@ -29,7 +29,8 @@ export class UI {
     this.h = handlers;
     this.viewMode = 'live'; // 'live' | 'session'
     this.lx = [];           // live x (seconds, relative to first sample)
-    this.ly = [];           // live y (force)
+    this.lys = [[]];        // live y per channel (parallel arrays); [0] is the primary
+    this.channels = [];     // channel descriptors shown on the live chart [{id,label,color}]
     this.t0 = null;
     this._redrawQueued = false;
     this.chart = null;
@@ -43,8 +44,8 @@ export class UI {
   }
 
   init() {
-    // Top bar
-    $('connectBtn').onclick = () => this.h.onConnectToggle();
+    // Top bar — Connect adds a device (clicking again adds another).
+    $('connectBtn').onclick = () => this.h.onConnect();
     $('simulateBtn').onclick = () => this.h.onSimulate();
 
     // Command buttons (data-cmd attribute -> protocol command name)
@@ -88,7 +89,7 @@ export class UI {
     $('settingsBtn').onclick = (e) => { e.stopPropagation(); this.toggleSettings(); };
     // Connected-device pill -> disconnect menu
     $('status').onclick = (e) => { e.stopPropagation(); this.toggleDeviceMenu(); };
-    $('disconnectBtn').onclick = () => { this.toggleDeviceMenu(false); this.h.onConnectToggle(); };
+    $('disconnectBtn').onclick = () => { this.toggleDeviceMenu(false); this.h.onDisconnectAll(); };
     // Close any open popover when clicking outside it.
     document.addEventListener('click', (e) => {
       if (!$('settingsPanel').hidden && !e.target.closest('.settings-wrap')) this.toggleSettings(false);
@@ -147,7 +148,7 @@ export class UI {
     this.windowS = seconds;
     // Trim the existing buffer to the new window immediately.
     const cutoff = (this.lx[this.lx.length - 1] ?? 0) - seconds;
-    while (this.lx.length > 2 && this.lx[0] < cutoff) { this.lx.shift(); this.ly.shift(); }
+    while (this.lx.length > 2 && this.lx[0] < cutoff) { this.lx.shift(); for (const ys of this.lys) ys.shift(); }
     if (this.viewMode === 'live') this._queueRedraw();
   }
 
@@ -157,7 +158,25 @@ export class UI {
     return Math.max(320, $('chart').clientWidth || 800);
   }
 
-  _buildChart() {
+  // Live series spec: time + one line per channel. With no channels yet, fall
+  // back to a single "load" series so the empty live chart looks unchanged.
+  _liveSeries() {
+    if (!this.channels.length) {
+      return [{ label: 'time (s)' }, { label: 'load', stroke: '#3fb6ff', width: 1.6, points: { show: false } }];
+    }
+    return [
+      { label: 'time (s)' },
+      ...this.channels.map((c) => ({ label: c.label, stroke: c.color, width: 1.6, points: { show: false } })),
+    ];
+  }
+
+  // The data tuple matching the current live series (time + each channel's y).
+  _liveData() {
+    if (!this.lx.length) return [[0], ...this.lys.map(() => [0])];
+    return [this.lx, ...this.lys];
+  }
+
+  _buildChart(series, data) {
     const opts = {
       width: this._chartWidth(),
       height: 340,
@@ -165,17 +184,15 @@ export class UI {
       legend: { show: true },
       // Default cursor already snaps a point onto the series at the hovered x.
       cursor: { drag: { x: true, y: false } },
-      series: [
-        { label: 'time (s)' },
-        { label: 'load', stroke: '#3fb6ff', width: 1.6, points: { show: false } },
-      ],
+      series: series || this._liveSeries(),
       axes: [
         { stroke: '#8b97a6', grid: { stroke: '#2b3340', width: 1 }, ticks: { stroke: '#2b3340' } },
         { stroke: '#8b97a6', grid: { stroke: '#2b3340', width: 1 }, ticks: { stroke: '#2b3340' } },
       ],
       plugins: [this._tooltipPlugin()],
     };
-    this.chart = new uPlot(opts, [[0], [0]], $('chart'));
+    if (this.chart) this.chart.destroy();
+    this.chart = new uPlot(opts, data || [[0], [0]], $('chart'));
 
     // Auto-pause: freeze the live graph while the cursor is over it so the
     // trace doesn't scroll out from under the pointer.
@@ -189,6 +206,19 @@ export class UI {
         if (this.viewMode === 'live' && !this.paused) this._queueRedraw();
       }
     });
+  }
+
+  // Update the channel set (called by app.js when devices are added/removed).
+  // Rebuilds the uPlot instance since the live series array changes, and
+  // resizes the per-channel y buffers to match.
+  setChannels(channels) {
+    this.channels = channels.map((c) => ({ id: c.id, label: c.label, color: c.color }));
+    // One y-buffer per channel (preserve existing buffers by index where possible).
+    const n = this.channels.length || 1;
+    const next = [];
+    for (let i = 0; i < n; i++) next[i] = this.lys[i] || new Array(this.lx.length).fill(null);
+    this.lys = next;
+    if (this.viewMode === 'live') this._buildChart(this._liveSeries(), this._liveData());
   }
 
   setAutoPause(on) {
@@ -232,17 +262,20 @@ export class UI {
     if (this.chart) this.chart.setSize({ width: this._chartWidth(), height: 340 });
   }
 
-  pushLive(value) {
+  // Append one sampled frame: a shared timestamp plus each channel's latest
+  // value (null before a channel has produced data). Called on a fixed timer
+  // by app.js, replacing the old per-reading pushLive.
+  sampleFrame(values) {
     const now = performance.now() / 1000;
     if (this.t0 === null) this.t0 = now;
     const t = now - this.t0;
     this.lx.push(t);
-    this.ly.push(value);
-    // Trim to the rolling window.
+    for (let i = 0; i < this.lys.length; i++) this.lys[i].push(values[i] ?? null);
+    // Trim every buffer to the rolling window in lockstep.
     const cutoff = t - this.windowS;
     while (this.lx.length > 2 && this.lx[0] < cutoff) {
       this.lx.shift();
-      this.ly.shift();
+      for (const ys of this.lys) ys.shift();
     }
     if (this.viewMode === 'live' && !this.paused && !this.hoverPaused) this._queueRedraw();
   }
@@ -260,7 +293,7 @@ export class UI {
     this._redrawQueued = true;
     requestAnimationFrame(() => {
       this._redrawQueued = false;
-      if (this.viewMode === 'live' && this.chart) this.chart.setData([this.lx, this.ly]);
+      if (this.viewMode === 'live' && this.chart) this.chart.setData(this._liveData());
     });
   }
 
@@ -278,7 +311,11 @@ export class UI {
     this._setPauseBadge(false);
     const xs = rec.samples.map((s) => s.t / 1000);
     const ys = rec.samples.map((s) => s.value);
-    this.chart.setData([xs.length ? xs : [0], ys.length ? ys : [0]]);
+    // Session view uses a single "load" series — rebuild since live may have many.
+    this._buildChart(
+      [{ label: 'time (s)' }, { label: 'load', stroke: '#3fb6ff', width: 1.6, points: { show: false } }],
+      [xs.length ? xs : [0], ys.length ? ys : [0]],
+    );
     this._renderHeader({ id: rec.name, config: rec.config, material: matStr(rec.material) });
     $('liveBtn').hidden = false;
     // In a saved session, only Back-to-Live + Export apply.
@@ -293,7 +330,8 @@ export class UI {
     $('liveBtn').hidden = true;
     $('pauseBtn').hidden = false;
     $('clearGraphBtn').hidden = false;
-    this.chart.setData([this.lx.length ? this.lx : [0], this.ly.length ? this.ly : [0]]);
+    // Rebuild for the live (multi-)series; session view used a single series.
+    this._buildChart(this._liveSeries(), this._liveData());
     this.h.onSelectSession(null);
   }
 
@@ -307,11 +345,13 @@ export class UI {
   _setPauseBadge(on) { $('pauseBadge').hidden = !on; }
 
   clearLive() {
-    this.lx = []; this.ly = []; this.t0 = null;
-    if (this.viewMode === 'live') this.chart.setData([[0], [0]]);
+    this.lx = []; this.t0 = null;
+    this.lys = (this.channels.length ? this.channels : [0]).map(() => []);
+    if (this.viewMode === 'live') this.chart.setData(this._liveData());
   }
 
-  // Data currently shown on the chart (for the live Export button).
+  // Data currently shown on the chart (for the live Export button). Exports the
+  // primary/first channel's series for now.
   currentData() {
     const d = this.chart && this.chart.data;
     return { xs: Array.from((d && d[0]) || []), ys: Array.from((d && d[1]) || []), unit: this.unit };
@@ -434,27 +474,23 @@ export class UI {
 
   // ---- readouts ----------------------------------------------------------
 
+  // Reflect the PRIMARY channel's connection state into the controls. The
+  // device pill text itself is driven by setDeviceSummary (multi-device aware).
   setStatus(state, name) {
     const connected = state === 'connected';
     const connecting = state === 'connecting';
 
-    // Green device pill (clickable, opens the disconnect menu) shows only when connected.
-    const pill = $('status');
-    pill.hidden = !connected;
-    if (connected) pill.textContent = name || 'LineScale 3';
     if (!connected) this.toggleDeviceMenu(false);
 
-    // The Connect button doubles as the disconnected / connecting indicator,
-    // and is hidden once connected (disconnect lives in the device-pill menu).
+    // The Connect button is the disconnected / connecting indicator and also the
+    // "add another device" action; it stays visible so more devices can be added.
     const btn = $('connectBtn');
-    btn.hidden = connected;
     btn.disabled = connecting;
-    btn.textContent = connecting ? 'Connecting…' : 'Disconnected';
+    btn.textContent = connecting ? 'Connecting…' : (connected ? '+ Add device' : 'Connect');
 
-    // Simulate is available only while fully disconnected.
-    $('simulateSection').hidden = connected || connecting;
+    // Simulate stays available so additional sims can be added for testing.
 
-    // Enable/disable device controls.
+    // Enable/disable device controls (operate on the primary).
     document.querySelectorAll('.cmd').forEach((b) => (b.disabled = !connected));
     document.querySelectorAll('.device-setting').forEach((el) => (el.disabled = !connected));
     $('recordBtn').disabled = !connected;
@@ -488,6 +524,56 @@ export class UI {
   setMax(value, unit) {
     $('max').textContent = value.toFixed(2);
     if (unit) $('unitMax').textContent = unit;
+  }
+
+  // The connected-device pill text: the device name when one is connected, or
+  // "N devices" when several. Called by app.js as channels are added/removed.
+  setDeviceSummary(count, name) {
+    const pill = $('status');
+    pill.hidden = count < 1;
+    if (count >= 1) pill.textContent = count === 1 ? (name || 'LineScale 3') : `${count} devices`;
+    if (count < 1) this.toggleDeviceMenu(false);
+  }
+
+  // Render the per-channel readout strip: one small card per connected channel
+  // (color swatch, editable label, current value + unit, max, disconnect ×).
+  // chans: [{ id, label, color, current, max, unit }].
+  renderChannels(chans) {
+    const strip = $('channelStrip');
+    strip.hidden = chans.length === 0;
+    strip.innerHTML = '';
+    for (const c of chans) {
+      const card = document.createElement('div');
+      card.className = 'chan-card';
+
+      const sw = document.createElement('span');
+      sw.className = 'chan-swatch';
+      sw.style.background = c.color;
+
+      const body = document.createElement('div');
+      body.className = 'chan-body';
+      const label = document.createElement('input');
+      label.className = 'chan-label';
+      label.value = c.label;
+      label.title = 'Rename channel';
+      label.onchange = () => this.h.onChannelLabel(c.id, label.value.trim() || c.label);
+      const vals = document.createElement('div');
+      vals.className = 'chan-vals';
+      vals.innerHTML =
+        `<span class="chan-cur">${c.current.toFixed(2)}</span>` +
+        `<span class="chan-unit">${c.unit || ''}</span>` +
+        `<span class="chan-max">max ${c.max.toFixed(2)}</span>`;
+      body.append(label, vals);
+
+      const close = document.createElement('button');
+      close.className = 'chan-close';
+      close.textContent = '×';
+      close.title = 'Disconnect this device';
+      close.onclick = () => this.h.onChannelDisconnect(c.id);
+
+      card.append(sw, body, close);
+      strip.append(card);
+    }
   }
 
   setRecordingState(isRecording) {

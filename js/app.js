@@ -9,9 +9,17 @@ import { settings, saveSettings } from './settings.js';
 import * as fs from './filesave.js';
 
 const store = new Store();
-let connection = null;
-let sessionMax = 0;
-let lastUnit = null;
+
+// Multi-device "channels". Each channel wraps one Source plus its live state.
+// channels[0] is the PRIMARY: it drives the hero readout, device controls,
+// settings, and (for this stage) recording. `connection` always mirrors the
+// primary source so the existing primary-only code keeps working.
+const CHAN_COLORS = ['#3fb6ff', '#ffb020', '#2ec36a', '#ff5252', '#b06fff', '#ff8f3f'];
+let channels = [];     // [{ id, source, label, color, unit, current, max, name }]
+let connection = null; // = channels[0]?.source
+let nextChanId = 1;
+let sampleTimer = null; // shared ~33 ms live-graph sampler
+
 let activeSessionId = null;
 let recInfoTimer = null;
 let recordingNamed = false; // did the user type a name for the active recording?
@@ -26,7 +34,8 @@ async function getSessionActive(id) {
 }
 
 const ui = new UI({
-  onConnectToggle, onSimulate, onCommand, onResetMax, onClearGraph,
+  onConnect, onSimulate, onCommand, onResetMax, onClearGraph,
+  onDisconnectAll, onChannelDisconnect, onChannelLabel,
   onToggleRecord, onSelectSession, onRenameSession, onExportSession, onExportSessionGraph, onDeleteSession,
   onSetting, onDeviceSetting, onPowerOff, onChooseFolder, onRecordFieldChange, onExportGraph,
   onSessionSearch, onSessionSort, onEditSession,
@@ -103,82 +112,155 @@ async function main() {
   await refreshSessions();
 }
 
-// ---- connection ----------------------------------------------------------
+// ---- channels / connection ------------------------------------------------
 
-function wire(source) {
-  source.onStatus((s) => {
-    ui.setStatus(s.state, s.name);
-    if (s.state === 'connecting') {
-      ui.resetDiag();
-    } else if (s.state === 'connected') {
-      sessionMax = 0; lastUnit = null;
-      ui.clearLive();
-      ui.setMax(0);
-    } else if (s.state === 'disconnected') {
-      connection = null;
-      if (store.recording) stopRecording(); // flush any in-progress recording
-    }
-  });
-  source.onReading(handleReading);
+// Add a new channel for the given source, wire its events, and connect it.
+async function addChannel(source) {
+  const id = nextChanId++;
+  const idx = channels.length;
+  const ch = {
+    id, source,
+    label: `Channel ${idx + 1}`,
+    color: CHAN_COLORS[idx % CHAN_COLORS.length],
+    unit: null, current: 0, max: 0, name: '',
+  };
+  channels.push(ch);
+  if (channels.length === 1) connection = source; // first device is the primary
+
+  source.onStatus((s) => onChannelStatus(ch, s));
+  source.onReading((r) => handleReading(ch, r));
   if (source.onDiag) source.onDiag((d) => {
+    if (ch !== channels[0]) return; // diagnostics follow the primary only
     ui.diag(d);
     if (d.line) console.debug('[LS3]', d.line);
     if (d.raw) console.debug('[LS3] raw', d.raw.hex, '·', d.raw.ascii);
   });
-  return source;
-}
 
-async function onConnectToggle() {
-  if (connection) { await connection.disconnect(); return; }
+  ui.setChannels(channels);
+  renderChannelStrip();
+  startSampler();
   try {
-    connection = wire(new BLEConnection());
-    await connection.connect();
+    await source.connect();
   } catch (err) {
-    connection = null;
-    ui.setStatus('disconnected');
+    removeChannel(ch); // connect failed — undo the half-added channel
     ui.toast(err.message || 'Connection failed', true);
   }
 }
 
+function onChannelStatus(ch, s) {
+  const isPrimary = ch === channels[0];
+  if (isPrimary) ui.setStatus(s.state, s.name);
+  if (s.state === 'connecting') {
+    if (isPrimary) ui.resetDiag();
+  } else if (s.state === 'connected') {
+    ch.name = s.name || 'LineScale 3';
+    if (isPrimary) { ch.max = 0; ch.unit = null; ui.setMax(0); }
+    refreshDeviceUI();
+  } else if (s.state === 'disconnected') {
+    removeChannel(ch);
+  }
+}
+
+// Remove a channel (its source disconnected or failed). Re-points the primary
+// and stops any in-progress recording when the last device goes away.
+function removeChannel(ch) {
+  const i = channels.indexOf(ch);
+  if (i === -1) return;
+  channels.splice(i, 1);
+  connection = channels[0]?.source || null;
+  ui.setChannels(channels);
+  refreshDeviceUI();
+  if (!channels.length) {
+    stopSampler();
+    ui.setStatus('disconnected');
+    if (store.recording) stopRecording(); // flush any in-progress recording
+  }
+}
+
+// Reflect the channel set into the device pill + per-channel strip.
+function refreshDeviceUI() {
+  ui.setDeviceSummary(channels.length, channels[0]?.name);
+  renderChannelStrip();
+}
+
+function renderChannelStrip() {
+  ui.renderChannels(channels.map((c) => ({
+    id: c.id, label: c.label, color: c.color,
+    current: c.current, max: c.max, unit: c.unit || '',
+  })));
+}
+
+// Shared live-graph sampler: ~30 Hz, appends one frame (shared time + each
+// channel's latest value) so all lines stay aligned on a common x-axis.
+function startSampler() {
+  if (sampleTimer) return;
+  sampleTimer = setInterval(() => {
+    ui.sampleFrame(channels.map((c) => (c.unit === null ? null : c.current)));
+  }, 33);
+}
+function stopSampler() {
+  clearInterval(sampleTimer); sampleTimer = null;
+}
+
+async function onConnect() {
+  await addChannel(new BLEConnection());
+}
+
 async function onSimulate() {
-  if (connection) await connection.disconnect();
-  connection = wire(new Simulator());
-  await connection.connect();
+  await addChannel(new Simulator());
   ui.toast('Simulated device running');
 }
 
-function handleReading(reading) {
-  // Reset max if the unit changed (old max is in the old unit).
-  if (lastUnit !== null && reading.unit !== lastUnit) { sessionMax = 0; }
-  lastUnit = reading.unit;
+async function onDisconnectAll() {
+  for (const ch of [...channels]) await ch.source.disconnect();
+}
+
+async function onChannelDisconnect(id) {
+  const ch = channels.find((c) => c.id === id);
+  if (ch) await ch.source.disconnect();
+}
+
+function onChannelLabel(id, label) {
+  const ch = channels.find((c) => c.id === id);
+  if (!ch) return;
+  ch.label = label;
+  ui.setChannels(channels); // updates the graph legend
+}
+
+function handleReading(ch, reading) {
+  const isPrimary = ch === channels[0];
+  // Reset this channel's max if its unit changed (old max is in the old unit).
+  if (ch.unit !== null && reading.unit !== ch.unit) ch.max = 0;
+  ch.unit = reading.unit;
 
   const abs = absoluteForce(reading);
-  if (reading.value > sessionMax) sessionMax = reading.value;
+  if (reading.value > ch.max) ch.max = reading.value;
+  ch.current = reading.value;
 
-  ui.setReading(reading, abs, false);
-  ui.setMax(sessionMax, reading.unit);
-  ui.pushLive(reading.value);
-
-  if (store.recording) {
-    store.append(reading, abs);
+  if (isPrimary) {
+    ui.setReading(reading, abs, false);
+    ui.setMax(ch.max, reading.unit);
+    if (store.recording) store.append(reading, abs);
   }
+  renderChannelStrip();
 }
 
 async function onCommand(cmdName) {
   if (!connection) return;
   try {
     await connection.send(cmdName);
-    if (cmdName === 'CLEAR_PEAK') sessionMax = 0; // mirror the device peak clear
+    if (cmdName === 'CLEAR_PEAK' && channels[0]) channels[0].max = 0; // mirror the device peak clear
   } catch (err) {
     ui.toast(err.message || 'Command failed', true);
   }
 }
 
-// Single "reset": clears the app-side max and, if connected, tells the device
-// to clear its own peak-hold so the two stay in sync.
+// Single "reset": clears the primary's app-side max and, if connected, tells
+// the device to clear its own peak-hold so the two stay in sync.
 function onResetMax() {
-  sessionMax = 0;
-  ui.setMax(0, lastUnit);
+  if (channels[0]) channels[0].max = 0;
+  ui.setMax(0, channels[0]?.unit);
+  renderChannelStrip();
   if (connection) connection.send('CLEAR_PEAK').catch((e) => ui.toast(e.message || 'Reset failed', true));
 }
 
@@ -248,7 +330,7 @@ async function onToggleRecord(fields) {
   store.startRecording({
     testId: fields.testId, sample: fields.sample, config: fields.config, material: fields.material,
     name: idLabel(fields.testId, fields.sample),
-  }, lastUnit || 'kN');
+  }, channels[0]?.unit || 'kN');
   ui.setRecordingState(true);
   recInfoTimer = setInterval(updateRecInfo, 250);
   updateRecInfo();
