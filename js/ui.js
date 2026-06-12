@@ -11,6 +11,13 @@ const CHAN_COLORS = ['#3fb6ff', '#ffb020', '#2ec36a', '#ff5252', '#b06fff', '#ff
 // Display helper: material is a list; join for single-line display.
 const matStr = (m) => (Array.isArray(m) ? m.join(', ') : (m || ''));
 
+// Format a readout value with a fixed-width sign slot so the layout never
+// reflows when a value goes negative: U+2212 minus for negatives, U+2007 figure
+// space (digit width) otherwise. Relies on tabular-nums on the value.
+const SIGN_NEG = String.fromCharCode(0x2212); // minus sign
+const SIGN_POS = String.fromCharCode(0x2007); // figure space (digit width)
+const fmtSigned = (v) => (v < 0 ? SIGN_NEG : SIGN_POS) + Math.abs(v).toFixed(2);
+
 // Step the trailing integer in a string by delta, preserving any prefix and
 // zero-pad width (e.g. "01"->"02", "Beam-09"->"Beam-10"). Floors at 0; an empty
 // value steps up to "1". Non-numeric text without a trailing number is unchanged.
@@ -50,13 +57,8 @@ export class UI {
   init() {
     // Top-bar connection circle: red when no device (click connects one);
     // green with a count when connected (click lists devices to disconnect).
-    $('connCircle').onclick = (e) => {
-      e.stopPropagation();
-      if ((this._devices || []).length) this._toggleDeviceList();
-      else this.h.onConnect();
-    };
+    $('connCircle').onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(); };
     $('simulateBtn').onclick = () => this.h.onSimulate();
-    $('connectEnforcerBtn').onclick = () => this.h.onConnectEnforcer();
     $('discoverBtn').onclick = () => this.h.onDiscover();
 
     // Discovery/capture controls (debug panel).
@@ -547,35 +549,59 @@ export class UI {
 
   // ---- readouts ----------------------------------------------------------
 
-  // Connection circle + device list. `devices` = [{ id, label, kind }].
-  // Red empty circle when none; green circle with a count when connected.
-  // Clicking the circle (when connected) opens the list; each row has a red ×.
+  // Connection circle + device menu. `devices` = [{ id, label, kind }].
+  // The circle shows "+" when empty, the count when connected. Clicking it opens
+  // a menu to add a device (LineScale 3 / Rock Exotica Enforcer) and, when any
+  // are connected, to disconnect them (red ×).
   setDevices(devices) {
     this._devices = devices;
     const n = devices.length;
     const circle = $('connCircle');
     circle.textContent = n > 0 ? String(n) : '+';
-    circle.title = n > 0 ? 'Connected devices' : 'Connect a device';
+    circle.title = n > 0 ? 'Devices' : 'Connect a device';
 
     const menu = $('deviceList');
     menu.innerHTML = '';
-    for (const d of devices) {
-      const row = document.createElement('div');
-      row.className = 'device-row';
-      const info = document.createElement('div');
-      const nm = document.createElement('div'); nm.className = 'device-name'; nm.textContent = d.label;
-      const kind = document.createElement('div'); kind.className = 'device-kind'; kind.textContent = d.kind || '';
-      info.append(nm, kind);
-      const x = document.createElement('button');
-      x.className = 'device-x'; x.textContent = '×'; x.title = 'Disconnect';
-      x.onclick = (e) => { e.stopPropagation(); this.h.onChannelDisconnect(d.id); };
-      row.append(info, x);
-      menu.append(row);
+
+    // Add-device choices.
+    const addGroup = document.createElement('div');
+    addGroup.className = 'device-add-group';
+    const mkAdd = (label, fn) => {
+      const b = document.createElement('button');
+      b.className = 'device-add-btn';
+      b.innerHTML = `<span class="device-add-plus">+</span><span>${label}</span>`;
+      b.onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(false); fn(); };
+      return b;
+    };
+    addGroup.append(
+      mkAdd('LineScale 3', () => this.h.onConnect()),
+      mkAdd('Rock Exotica Enforcer', () => this.h.onConnectEnforcer()),
+    );
+    menu.append(addGroup);
+
+    // Connected devices (with disconnect ×).
+    if (n) {
+      const hdr = document.createElement('div');
+      hdr.className = 'device-list-hdr';
+      hdr.textContent = 'Connected';
+      menu.append(hdr);
+      for (const d of devices) {
+        const row = document.createElement('div');
+        row.className = 'device-row';
+        const info = document.createElement('div');
+        const nm = document.createElement('div'); nm.className = 'device-name'; nm.textContent = d.label;
+        const kind = document.createElement('div'); kind.className = 'device-kind'; kind.textContent = d.kind || '';
+        info.append(nm, kind);
+        const x = document.createElement('button');
+        x.className = 'device-x'; x.textContent = '×'; x.title = 'Disconnect';
+        x.onclick = (e) => { e.stopPropagation(); this.h.onChannelDisconnect(d.id); };
+        row.append(info, x);
+        menu.append(row);
+      }
     }
 
     document.querySelectorAll('.device-setting').forEach((el) => (el.disabled = n === 0));
     $('recordBtn').disabled = n === 0;
-    if (n === 0) this._toggleDeviceList(false);
   }
 
   // Reflect the primary device's live state into the Settings selects (rate +
@@ -602,12 +628,12 @@ export class UI {
     for (const c of chans) {
       const refs = this._bars && this._bars.get(c.id);
       if (!refs) continue;
-      refs.cur.textContent = c.current.toFixed(2);
+      refs.cur.textContent = fmtSigned(c.current);
       refs.curUnit.textContent = c.unit || '';
-      refs.max.textContent = c.max.toFixed(2);
+      refs.max.textContent = fmtSigned(c.max);
       refs.maxUnit.textContent = c.unit || '';
       refs.rate.textContent = c.rate ?? '–';
-      refs.batt.textContent = (c.battery ?? '–') + '%';
+      if (refs.batt) refs.batt.textContent = (c.battery ?? '–') + '%';
       refs.overload.hidden = !c.overloaded;
     }
   }
@@ -666,17 +692,23 @@ export class UI {
       const maxUnit = document.createElement('span'); maxUnit.className = 'unit';
       maxRO.val.append(max, maxUnit);
 
-      // Rate + Battery stacked vertically in one compact column.
+      // Rate (+ Battery, when the device reports it) stacked vertically.
       const meta = document.createElement('div');
       meta.className = 'dev-ro-meta';
       const rateRO = mkRO('dev-ro-rate', 'Rate');
       const rate = document.createElement('span'); rate.className = 'dev-rate-num';
       rateRO.val.append(rate, document.createTextNode(' Hz'));
+      meta.append(rateRO.box);
 
-      const battRO = mkRO('dev-ro-batt', 'Battery');
-      const batt = document.createElement('span'); batt.className = 'dev-batt-num';
-      battRO.val.append(batt);
-      meta.append(rateRO.box, battRO.box);
+      // The Enforcer has no battery telemetry — omit that readout for it.
+      const hasBattery = !String(c.type || '').startsWith('enforcer');
+      let batt = null;
+      if (hasBattery) {
+        const battRO = mkRO('dev-ro-batt', 'Battery');
+        batt = document.createElement('span'); batt.className = 'dev-batt-num';
+        battRO.val.append(batt);
+        meta.append(battRO.box);
+      }
 
       // Thin partial divider between adjacent sections.
       const mkDiv = () => { const d = document.createElement('div'); d.className = 'dev-divider'; return d; };
@@ -732,7 +764,7 @@ export class UI {
     const add = document.createElement('button');
     add.className = 'dev-add';
     add.innerHTML = `<span class="dev-add-icon">+</span><span class="dev-add-text">${chans.length ? 'Add Additional Device' : 'Connect Device'}</span>`;
-    add.onclick = () => this.h.onConnect();
+    add.onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(true); };
     wrap.append(add);
   }
 

@@ -40,7 +40,7 @@ export function enforcerReading(value, { battery = null, overloaded = false } = 
     battery,
     unit: 'kN',
     unitCode: 'N',
-    speedHz: null,
+    speedHz: 2, // the Enforcer streams at ~2 Hz
     checksumOk: true,
   };
 }

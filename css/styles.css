@@ -335,6 +335,18 @@ body.is-recording .device-bar { border-color: var(--red); }
   background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
   padding: 6px; box-shadow: 0 12px 40px rgba(0,0,0,.5);
 }
+.device-add-group { display: flex; flex-direction: column; gap: 2px; }
+.device-add-btn {
+  display: flex; align-items: center; gap: 9px; width: 100%; text-align: left;
+  background: none; border: none; color: var(--text); font: inherit; font-size: 14px;
+  font-weight: 600; padding: 8px 9px; border-radius: 7px; cursor: pointer;
+}
+.device-add-btn:hover { background: #1b212b; }
+.device-add-plus { color: var(--accent); font-size: 18px; line-height: 1; width: 14px; text-align: center; }
+.device-list-hdr {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
+  padding: 8px 9px 4px; margin-top: 4px; border-top: 1px solid var(--border);
+}
 .device-row { display: flex; align-items: center; gap: 10px; padding: 7px 9px; border-radius: 7px; }
 .device-row:hover { background: #1b212b; }
 .device-name { font-size: 14px; font-weight: 600; color: var(--text); }
