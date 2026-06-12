@@ -200,9 +200,10 @@ export async function listSessions(dir) {
     const base = entry.name.replace(/\.csv$/i, '');
     try {
       const rec = parseSessionCsv(await (await entry.getFile()).text(), base);
+      const hasVideo = await fileExists(dir, `${base}.mp4`);
       out.push({ id: base, name: rec.name, startedAt: rec.startedAt, endedAt: rec.endedAt,
         unit: rec.unit, max: rec.max, count: rec.count, duration: rec.duration,
-        channelCount: rec.channels.length,
+        channelCount: rec.channels.length, hasVideo,
         config: rec.config, material: rec.material });
     } catch { /* skip unreadable files */ }
   }
@@ -228,7 +229,7 @@ export async function hasSession(dir, name) {
 }
 
 export async function deleteSession(dir, base) {
-  for (const ext of ['csv', 'png']) { try { await dir.removeEntry(`${base}.${ext}`); } catch { /* ignore */ } }
+  for (const ext of ['csv', 'png', 'mp4']) { try { await dir.removeEntry(`${base}.${ext}`); } catch { /* ignore */ } }
 }
 
 // Rename a session's files. Returns the new base name (filename, no extension).
@@ -246,5 +247,10 @@ export async function renameSession(dir, oldBase, newName) {
     await writeFile(dir, `${newBase}.png`, png);
     await dir.removeEntry(`${oldBase}.png`);
   } catch { /* no png */ }
+  try {
+    const mp4 = await (await dir.getFileHandle(`${oldBase}.mp4`)).getFile();
+    await writeFile(dir, `${newBase}.mp4`, mp4);
+    await dir.removeEntry(`${oldBase}.mp4`);
+  } catch { /* no video */ }
   return newBase;
 }

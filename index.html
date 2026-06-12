@@ -61,6 +61,11 @@
             </label>
             <button id="powerOffBtn" class="btn device-setting" disabled>Power off device</button>
           </div>
+          <div class="settings-section">
+            <h3>Camera</h3>
+            <label class="setting"><span>Bridge URL</span><input type="text" id="setCameraUrl" data-setting="cameraBridgeUrl" class="setting-text" /></label>
+            <label class="setting"><span>Auto-connect camera</span><input type="checkbox" id="setCameraAuto" data-setting="cameraAutoConnect" /></label>
+          </div>
           <div class="settings-section" id="simulateSection">
             <h3>Testing &amp; capture</h3>
             <button id="discoverBtn" class="btn">Discovery / capture mode</button>
@@ -73,6 +78,16 @@
 
   <main>
     <section id="deviceBars" class="device-bars"></section>
+
+    <section id="cameraPanel" class="camera-panel">
+      <div class="camera-head">
+        <strong>Camera</strong>
+        <span id="cameraStatus" class="muted">not connected</span>
+        <span class="spacer"></span>
+        <button id="cameraConnectBtn" class="btn btn-sm">Connect camera</button>
+      </div>
+      <video id="cameraVideo" class="camera-video" muted autoplay playsinline hidden></video>
+    </section>
 
     <section class="record-bar">
       <div class="field-group">

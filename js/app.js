@@ -32,6 +32,7 @@ function connectedChannels() { return channels.filter((c) => c.connected); }
 let activeSessionId = null;
 let recInfoTimer = null;
 let recordingNamed = false; // did the user type a name for the active recording?
+let recordingVideo = false; // is the camera feed being recorded with this session?
 // Map from live-channel id -> recording-channel index, fixed when recording
 // starts. Channels added mid-recording aren't in the map (ignored); removed
 // channels simply stop appending.
@@ -455,6 +456,9 @@ async function onToggleRecord(fields) {
     name: idLabel(fields.testId, fields.sample),
   }, specs);
   ui.setRecordingState(true);
+  // Record the live camera feed too, but only when saving to a folder (video is
+  // folder-only by design). The live feed still shows even without recording.
+  recordingVideo = usingFolder() && ui.cameraLive() && ui.cameraStartRec();
   recInfoTimer = setInterval(updateRecInfo, 250);
   updateRecInfo();
   // Pre-authorize the folder now (Start is a user gesture) so the save on
@@ -475,6 +479,9 @@ async function stopRecording() {
   // Stop accumulating immediately so readings don't keep appending while the
   // name dialog is open (finalize without persisting yet).
   const rec = await store.stop({ persist: false });
+  // Stop video immediately (don't keep buffering while the name dialog is open).
+  const videoBlob = recordingVideo ? ui.cameraStopRec() : null;
+  recordingVideo = false;
   ui.setRecordingState(false);
   if (!rec) { await refreshSessions(); return; }
 
@@ -488,6 +495,7 @@ async function stopRecording() {
   }
   // Name = Test ID - Sample (falls back to the auto name when both are blank).
   rec.name = idLabel(rec.testId, rec.sample) || rec.name;
+  if (videoBlob) rec.videoBlob = videoBlob;
 
   // Save to the active library: the folder, or browser storage.
   if (usingFolder()) { if (rec.count) await saveSessionToFolder(rec); }
@@ -515,11 +523,12 @@ async function saveSessionToFolder(rec) {
   try { pngBlob = await graphBlobFor(rec); } catch { /* keep CSV even if the graph fails */ }
 
   const files = pngBlob ? { csv: csvBlob, png: pngBlob } : { csv: csvBlob };
+  if (rec.videoBlob) files.mp4 = rec.videoBlob; // recorded camera clip, same base name
   const ok = folderHandle && (await fs.ensurePermission(folderHandle, { prompt: true }));
   if (ok) {
     try {
       const base = await fs.saveFiles(folderHandle, rec.name, files);
-      ui.toast(`Saved ${base}.csv${pngBlob ? ' + .png' : ''} to ${folderHandle.name}`);
+      ui.toast(`Saved ${base}.csv${pngBlob ? ' + .png' : ''}${rec.videoBlob ? ' + .mp4' : ''} to ${folderHandle.name}`);
       return;
     } catch (e) {
       ui.toast('Folder save failed (' + (e.message || e) + ') — downloaded instead', true);
@@ -606,7 +615,13 @@ async function onSelectSession(id) {
   activeSessionId = id;
   if (id === null) { await refreshSessions(); return; }
   const rec = await getSessionActive(id);
-  if (rec) ui.showSession(rec);
+  if (rec) {
+    // Attach the recorded clip (folder mode) so the UI can play it back.
+    if (usingFolder()) {
+      try { rec.videoBlob = await fs.readFileBlob(folderHandle, `${id}.mp4`); } catch { /* no video */ }
+    }
+    ui.showSession(rec);
+  }
   await refreshSessions();
 }
 

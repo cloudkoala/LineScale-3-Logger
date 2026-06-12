@@ -11,6 +11,8 @@ const DEFAULTS = {
   autoSave: false,            // auto-save each recording (CSV + PNG) to a folder
   liveWindowS: 60,            // seconds of history shown on the live graph
   unit: 'kN',                 // global display unit (kN / kgf / lbf) — all devices forced to match
+  cameraBridgeUrl: 'ws://localhost:8088', // GoPro bridge WebSocket (gopro-bridge/)
+  cameraAutoConnect: false,   // auto-connect the camera feed on load
   // Persistent recording metadata (kept across recordings/reloads).
   testId: '',                 // stays the same across recordings unless changed
   sample: '01',               // auto-increments per recording; resets when testId changes

@@ -4,6 +4,7 @@
 
 import { MultiSelect } from './multiselect.js';
 import { asChannels } from './store.js';
+import { CameraFeed } from './camera.js';
 
 // Colors for multi-channel session rendering / PNG export (mirrors app.js).
 const CHAN_COLORS = ['#3fb6ff', '#ffb020', '#2ec36a', '#ff5252', '#b06fff', '#ff8f3f'];
@@ -52,6 +53,9 @@ export class UI {
     this.hoverPaused = false;// currently frozen because the cursor is over the chart
     this.sessionName = null;// name of the session being viewed, if any
     this.liveHeader = { id: 'Live', config: '', material: '' }; // live chart header
+    this.camera = new CameraFeed(); // GoPro/webcam live feed + recording
+    this._cameraUrl = 'ws://localhost:8088';
+    this._cameraWanted = false; // user has the live feed turned on
   }
 
   init() {
@@ -93,6 +97,13 @@ export class UI {
     });
     $('liveBtn').onclick = () => this.showLive();
 
+    // Camera live feed (fed by the local GoPro bridge).
+    this.camera.attach($('cameraVideo'));
+    this.camera.onStatus((s) => this._onCameraStatus(s));
+    $('cameraConnectBtn').onclick = () => this._toggleCamera();
+    $('setCameraUrl').onchange = () => this.h.onSetting('cameraBridgeUrl', ($('setCameraUrl').value || '').trim());
+    $('setCameraAuto').onchange = () => this.h.onSetting('cameraAutoConnect', $('setCameraAuto').checked);
+
     // Saved-session search + sort
     $('sessionSearch').oninput = () => this.h.onSessionSearch($('sessionSearch').value);
     $('sessionSort').onchange = () => this.h.onSessionSort($('sessionSort').value);
@@ -133,6 +144,10 @@ export class UI {
     $('setAutoSave').checked = !!s.autoSave;
     $('setWindow').value = String(s.liveWindowS);
     $('setUnit').value = s.unit || 'kN';
+    this._cameraUrl = s.cameraBridgeUrl || 'ws://localhost:8088';
+    $('setCameraUrl').value = this._cameraUrl;
+    $('setCameraAuto').checked = !!s.cameraAutoConnect;
+    if (s.cameraAutoConnect) this._toggleCamera(true);
     this.setRecordField('testId', s.testId || '');
     this.setRecordField('sample', s.sample || '01');
     this.setRecordField('config', s.config || '');
@@ -353,6 +368,10 @@ export class UI {
     // In a saved session, only Back-to-Live + Export apply.
     $('pauseBtn').hidden = true;
     $('clearGraphBtn').hidden = true;
+    // Show the session's recorded clip (if any) in the camera panel; otherwise
+    // stop the live feed display while viewing history.
+    if (rec.videoBlob) this.playSessionVideo(rec.videoBlob);
+    else { this.camera.clearPlayback(); $('cameraVideo').hidden = true; }
   }
 
   showLive() {
@@ -364,7 +383,43 @@ export class UI {
     $('clearGraphBtn').hidden = false;
     // Rebuild for the live (multi-)series; session view used a single series.
     this._buildChart(this._liveSeries(), this._liveData());
+    // Restore the live camera feed (a session view may have shown a recording).
+    this.camera.clearPlayback();
+    if (this._cameraWanted) this.camera.connect(this._cameraUrl);
+    else $('cameraVideo').hidden = true;
     this.h.onSelectSession(null);
+  }
+
+  // ---- camera feed -------------------------------------------------------
+  _toggleCamera(forceOn) {
+    if (!forceOn && this.camera.isConnected()) { this._cameraWanted = false; this.camera.disconnect(); }
+    else { this._cameraWanted = true; this.camera.connect(this._cameraUrl); }
+  }
+
+  _onCameraStatus(s) {
+    const txt = { connecting: 'connecting…', connected: 'connected', live: 'live', disconnected: 'not connected', error: s.message || 'error' };
+    const el = $('cameraStatus');
+    el.textContent = txt[s.state] || s.state;
+    el.classList.toggle('err', s.state === 'error');
+    const busy = s.state === 'live' || s.state === 'connected' || s.state === 'connecting';
+    $('cameraConnectBtn').textContent = busy ? 'Disconnect camera' : 'Connect camera';
+    if (s.state === 'live') $('cameraVideo').hidden = false;
+    else if ((s.state === 'disconnected' || s.state === 'error') && this.viewMode !== 'session') $('cameraVideo').hidden = true;
+  }
+
+  connectCamera() { this._toggleCamera(true); }
+
+  // For app.js recording integration:
+  cameraLive() { return this.camera.isLive(); }
+  cameraStartRec() { return this.camera.startRecording(); }
+  cameraStopRec() { return this.camera.stopRecording(); }
+
+  // Play a saved session's recorded clip in the camera panel.
+  playSessionVideo(blob) {
+    this.camera.showBlob(blob);
+    $('cameraVideo').hidden = false;
+    $('cameraStatus').textContent = 'recording playback';
+    $('cameraConnectBtn').textContent = 'Connect camera';
   }
 
   // Live header (Test ID-Sample + config/material). Applied only while viewing
