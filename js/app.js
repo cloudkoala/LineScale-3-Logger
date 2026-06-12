@@ -590,7 +590,16 @@ function materialsFromSessions(list) {
 }
 
 async function reconnectFolder() {
-  if (await folderGranted(true)) await refreshSessions();
+  // Re-pick the folder to restore access. requestPermission on a handle restored
+  // across a reload can silently fail to prompt, so the directory picker is the
+  // reliable path — it must be the first call in this click so the user gesture
+  // is still live. Picking the same folder re-grants permission and refreshes
+  // the stored handle.
+  try {
+    folderHandle = await fs.pickFolder();
+    ui.setFolderName(folderHandle.name);
+  } catch { return; } // user dismissed the picker
+  await refreshSessions();
 }
 
 async function onSelectSession(id) {

@@ -843,7 +843,7 @@ export class UI {
     li.className = 'session-item';
     const meta = document.createElement('span');
     meta.className = 'session-meta';
-    meta.textContent = `Folder “${folderName}” needs permission to list its sessions.`;
+    meta.textContent = `Folder “${folderName}” needs permission again — re-select it to restore your sessions.`;
     const btn = document.createElement('button');
     btn.className = 'icon-btn';
     btn.textContent = 'Reconnect folder';
