@@ -1,0 +1,13 @@
+{
+  "name": "gopro-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Local bridge that streams a GoPro's wireless preview to the Dyno-Meter web app",
+  "scripts": {
+    "start": "node bridge.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

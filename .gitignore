@@ -3,3 +3,6 @@
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# GoPro bridge installed deps (users run npm install)
+gopro-bridge/node_modules/
