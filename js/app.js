@@ -5,6 +5,7 @@ import { ENFORCER_PROFILE } from './profiles.js';
 import { Simulator } from './simulator.js';
 import { EnforcerSimulator } from './enforcer-sim.js';
 import { DiscoverySource } from './discovery.js';
+import { tareEnforcer } from './enforcer.js';
 import { Store, recordingToCSV, asChannels } from './store.js';
 import { UI } from './ui.js';
 import { absoluteForce } from './protocol.js';
@@ -301,6 +302,15 @@ function onChannelLabel(id, label) {
 async function onChannelCommand(id, cmd) {
   const ch = channels.find((c) => c.id === id);
   if (!ch) return;
+  // The Enforcer has no device-side zero; Zero/Tare do a software tare instead
+  // (subtract the current raw count as the new baseline, like the official app).
+  if (ch.source.deviceType === 'enforcer' && (cmd === 'ZERO' || cmd === 'SET_ABS_ZERO')) {
+    tareEnforcer();
+    ch.max = 0;
+    renderChannelStrip();
+    ui.toast('Zeroed');
+    return;
+  }
   try {
     await ch.source.send(cmd);
     if (cmd === 'CLEAR_PEAK') { ch.max = 0; renderChannelStrip(); }

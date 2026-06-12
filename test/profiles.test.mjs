@@ -36,7 +36,10 @@ check('Enforcer deviceLabel', ENFORCER_PROFILE.deviceLabel === 'Rock Exotica Enf
 check('Enforcer is kN-only', ENFORCER_PROFILE.canSetUnit === false);
 check('Enforcer ignores unknown cmds', ENFORCER_PROFILE.ignoreUnknownCmd === true);
 check('Enforcer scans all devices', ENFORCER_PROFILE.acceptAllDevices === true);
-check('Enforcer passthrough framing', ENFORCER_PROFILE.endFlag == null);
+check('Enforcer CR-delimited framing', ENFORCER_PROFILE.endFlag === 0x0d && ENFORCER_PROFILE.packetLen == null);
+check('Enforcer has start sequence', typeof ENFORCER_PROFILE.startStream === 'function');
+check('Enforcer start cmds (d, l)', ENFORCER_PROFILE.cmd.DESC[0] === 0x64 && ENFORCER_PROFILE.cmd.LOAD[0] === 0x6c);
+check('Enforcer service uuid wired', ENFORCER_PROFILE.services[0] === '0bd51666-e7cb-469b-8e4d-2742f1ba77cc');
 check('Enforcer parse callable', typeof ENFORCER_PROFILE.parse === 'function');
 
 console.log(`\n${pass} passed, ${fail} failed`);

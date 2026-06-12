@@ -49,14 +49,29 @@ export const ENFORCER_PROFILE = {
   deviceLabel: 'Rock Exotica Enforcer',
   defaultUnit: 'kN',
   canSetUnit: false,              // Enforcer is kN-only (likely)
-  services: [],                   // TODO(capture): real service UUID
-  notifyUuid: null,
-  writeUuid: null,
-  cmd: {},                        // TODO(capture): command frames
+  // Discovered via nRF Connect (reverse-engineering). One characteristic does
+  // double duty: write commands to it, receive load data back via indications.
+  services: ['0bd51666-e7cb-469b-8e4d-2742f1ba77cc'],
+  notifyUuid: 'e7add780-b042-4876-aae1-112855353cc1',
+  writeUuid: 'e7add780-b042-4876-aae1-112855353cc1',
+  // Commands are single raw bytes written to the data characteristic.
+  cmd: {
+    DESC: Uint8Array.from([0x64]), // 'd' — request the device descriptor dump
+    LOAD: Uint8Array.from([0x6c]), // 'l' — start the load (force) stream
+  },
   parse: parseEnforcerReading,
-  endFlag: null,                  // passthrough until framing is known
-  packetLen: null,
+  endFlag: 0x0d,                  // CR-terminated frames…
+  packetLen: null,                // …of variable length (delimited mode)
   ignoreUnknownCmd: true,         // rate/zero-mode/unit broadcasts become no-ops
+  // Keep scanning all devices: the chooser shows the Enforcer even if it doesn't
+  // advertise the custom service, and the service is read once connected.
   acceptAllDevices: true,
-  startStream: null,              // TODO(capture): may need the iOS app's init sequence
+  // Reverse-engineered startup: subscribe (handled by startNotifications) then
+  // write 'd' (descriptor) and 'l' (start streaming load).
+  async startStream(conn, tries) {
+    conn._log(`enforcer start: d + l  [try ${tries}]`);
+    await conn.send('DESC');
+    await new Promise((r) => setTimeout(r, 80));
+    await conn.send('LOAD');
+  },
 };

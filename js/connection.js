@@ -69,12 +69,27 @@ export class BLEConnection extends Source {
     this.device.addEventListener('gattserverdisconnected', this._onDisconnect);
 
     this.server = await this.device.gatt.connect();
-    const service = await this.server.getPrimaryService(services[0]);
 
-    // Enumerate the service's characteristics so we can confirm the expected
-    // UUIDs and fall back to capability-based detection if they differ.
-    const chars = await service.getCharacteristics();
-    this._log(`service ${short(services[0])} has ${chars.length} characteristic(s):`);
+    // Gather characteristics. With a known service UUID we read it directly;
+    // with an unknown service (scaffold profiles) we enumerate everything the
+    // browser will expose. NOTE: Web Bluetooth only exposes services listed in
+    // optionalServices up front — an undeclared custom service stays invisible.
+    const chars = [];
+    if (services.length) {
+      const service = await this.server.getPrimaryService(services[0]);
+      const cs = await service.getCharacteristics();
+      this._log(`service ${short(services[0])} has ${cs.length} characteristic(s):`);
+      chars.push(...cs);
+    } else {
+      const all = await this.server.getPrimaryServices();
+      this._log(`no service UUID configured — enumerating ${all.length} accessible service(s)`);
+      for (const svc of all) {
+        let cs = [];
+        try { cs = await svc.getCharacteristics(); } catch { continue; }
+        this._log(`service ${short(svc.uuid)} has ${cs.length} characteristic(s):`);
+        chars.push(...cs);
+      }
+    }
     for (const c of chars) {
       this._log(`  • ${short(c.uuid)}  [${charFlags(c.properties)}]`);
     }
@@ -190,27 +205,29 @@ export class BLEConnection extends Source {
     else { this.stats.failed++; this._diag({ parseFail: toAscii(frame) }); }
   }
 
-  // Split the rolling byte buffer into packetLen-byte frames terminated by the
-  // profile's endFlag, tolerating BLE chunking and the occasional stray byte.
+  // Split the rolling byte buffer into frames terminated by the profile's
+  // endFlag. With a fixed packetLen (LS3) frames are exactly that long; with a
+  // null packetLen (e.g. Enforcer) frames are variable-length — everything up to
+  // each endFlag. Tolerates BLE chunking and the occasional stray byte.
   _drainFrames() {
     const { endFlag, packetLen } = this.profile;
+    const delimited = packetLen == null; // variable length: just split on the flag
     let end;
     while ((end = this._buf.indexOf(endFlag)) !== -1) {
-      const frameLen = end + 1;
       let frame = null;
-      if (frameLen === packetLen) {
-        frame = this._buf.slice(0, packetLen);
-      } else if (frameLen > packetLen) {
-        // Leading garbage: keep the last packetLen bytes up to and incl. the flag.
-        frame = this._buf.slice(frameLen - packetLen, frameLen);
+      if (delimited) {
+        frame = this._buf.slice(0, end); // frame is everything before the flag
+      } else {
+        const frameLen = end + 1;
+        if (frameLen === packetLen) frame = this._buf.slice(0, packetLen);
+        else if (frameLen > packetLen) frame = this._buf.slice(frameLen - packetLen, frameLen);
       }
-      this._buf = this._buf.slice(frameLen); // drop consumed bytes either way
-      if (frame) this._consumeFrame(frame);
+      this._buf = this._buf.slice(end + 1); // always drop through the flag
+      if (frame && frame.length) this._consumeFrame(frame);
     }
     this._diag({ stats: { ...this.stats } });
     // Guard against unbounded growth if no end flag ever arrives.
-    if (this._buf.length > 4 * packetLen) {
-      this._buf = this._buf.slice(this._buf.length - packetLen);
-    }
+    const cap = (packetLen || 64) * 4;
+    if (this._buf.length > cap) this._buf = this._buf.slice(this._buf.length - cap);
   }
 }
