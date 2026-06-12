@@ -42,10 +42,15 @@ export function savedFolder() { return idb('readonly', (s) => s.get(KEY)); }
 export async function ensurePermission(handle, { prompt = false } = {}) {
   if (!handle) return false;
   const opts = { mode: 'readwrite' };
-  if ((await handle.queryPermission(opts)) === 'granted') return true;
-  if (!prompt) return false;
-  try { return (await handle.requestPermission(opts)) === 'granted'; }
-  catch { return false; }
+  // When prompting, call requestPermission FIRST — it must run inside the live
+  // user gesture, and an `await queryPermission()` before it would expire that
+  // transient activation, so the dialog would never appear. requestPermission
+  // returns 'granted' immediately (no dialog) when permission is already held.
+  if (prompt) {
+    try { return (await handle.requestPermission(opts)) === 'granted'; }
+    catch { return false; }
+  }
+  return (await handle.queryPermission(opts)) === 'granted';
 }
 
 function safe(name) {
