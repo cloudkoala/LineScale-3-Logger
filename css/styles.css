@@ -444,6 +444,8 @@ body.is-recording .device-bar { border-color: var(--red); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .modal-card-wide { width: 460px; }
 .modal-note { margin: 0 0 12px; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.modal-note summary { cursor: pointer; font-weight: 600; color: var(--text); list-style: revert; }
+.modal-note p { margin: 8px 0 0; }
 .modal-note strong { color: var(--text); font-weight: 600; }
 /* Bluetooth device picker (Electron) */
 .ble-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; margin: 12px 0; }

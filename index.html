@@ -218,7 +218,10 @@
   <div id="bleModal" class="modal" hidden>
     <div class="modal-card">
       <h3>Select a Bluetooth device</h3>
-      <p class="modal-note">First time connecting a GoPro? Put it in pairing mode first: on the camera, <strong>Preferences → Connections → Connect Device → GoPro Quik App</strong>. Otherwise it won't appear (or will drop immediately).</p>
+      <details class="modal-note">
+        <summary>First time connecting?</summary>
+        <p>Put the GoPro in pairing mode before selecting it. If it isn't, the camera may still appear in this list but won't be able to connect.</p>
+      </details>
       <div id="bleList" class="ble-list"><div class="muted">Scanning…</div></div>
       <div class="modal-actions">
         <button id="bleCancel" class="btn">Cancel</button>
