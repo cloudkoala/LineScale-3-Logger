@@ -469,4 +469,4 @@ body.is-recording .device-bar { border-color: var(--red); }
   box-shadow: 0 8px 30px rgba(0,0,0,.4);
 }
 .toast.err { border-color: var(--red); color: #ffd5d5; }
-.toast.warn { border-color: #e0a93b; color: #ffe6b0; }
+.toast.warn { border-color: var(--amber); color: var(--amber); }
