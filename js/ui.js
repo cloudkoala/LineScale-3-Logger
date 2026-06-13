@@ -70,7 +70,8 @@ export class UI {
     this._cameraUrl = 'ws://localhost:8088';
     this._cameraWanted = false; // user has the live feed turned on
     this._cameraSilent = false; // current connect is best-effort (auto-connect): suppress errors
-    this._cameraGiveUp = null;  // give-up timer for a silent connect that never goes live
+    this._cameraConnecting = false; // explicit connect in progress: show yellow "connecting…"
+    this._cameraGiveUp = null;  // give-up timer for a connect that never goes live
   }
 
   init() {
@@ -468,17 +469,32 @@ export class UI {
   // are not silent: they report errors and keep retrying.
   _toggleCamera(forceOn, { silent = false } = {}) {
     clearTimeout(this._cameraGiveUp);
+    this._cameraConnecting = false;
     if (!forceOn && this.camera.isConnected()) {
       this._cameraWanted = false; this._cameraSilent = false;
       this.camera.disconnect();
+      return;
+    }
+    this._cameraWanted = true; this._cameraSilent = silent;
+    this.camera.connect(this._cameraUrl);
+    if (silent) {
+      // Auto-connect: quietly give up if no GoPro shows up.
+      this._cameraGiveUp = setTimeout(() => {
+        if (!this.camera.isLive()) { this._cameraWanted = false; this.camera.disconnect(); }
+      }, 12000);
     } else {
-      this._cameraWanted = true; this._cameraSilent = silent;
-      this.camera.connect(this._cameraUrl);
-      if (silent) {
-        this._cameraGiveUp = setTimeout(() => {
-          if (!this.camera.isLive()) { this._cameraWanted = false; this.camera.disconnect(); }
-        }, 12000);
-      }
+      // Explicit connect: show a yellow "connecting…" that updates to "retrying…",
+      // and only turns into a red failure if it never goes live within the window.
+      this._cameraConnecting = true;
+      this.toast('Connecting to GoPro…', 'warn', { sticky: true });
+      this._cameraGiveUp = setTimeout(() => {
+        this._cameraConnecting = false;
+        if (!this.camera.isLive()) {
+          this._cameraWanted = false;
+          this.camera.disconnect();
+          this.toast("Couldn't connect to the GoPro — check it's on and connected.", true);
+        }
+      }, 30000);
     }
   }
 
@@ -486,17 +502,25 @@ export class UI {
     // Diagnostics relayed from the bridge (e.g. "can't reach the GoPro") — surface
     // them so a blank feed isn't a silent mystery. Doesn't change connection state.
     if (s.state === 'bridge') {
-      if (!this._cameraSilent && (s.level === 'error' || s.level === 'warn')) this.toast(s.message, true);
+      if (this._cameraConnecting) {
+        // Still connecting (explicit): show progress as yellow, never red. The red
+        // failure only comes from the connect timeout in _toggleCamera.
+        if (s.level !== 'live') this.toast(s.level === 'ok' ? 'Connecting to GoPro…' : 'Retrying connection to GoPro…', 'warn', { sticky: true });
+      } else if (!this._cameraSilent && (s.level === 'error' || s.level === 'warn')) {
+        this.toast(s.message, true);
+      }
       return;
     }
     if (s.state === 'lost' && !this._cameraSilent) this.toast(s.message || 'GoPro feed lost', true); // disconnect() fires next to clean up
     if (s.state === 'live') {
-      clearTimeout(this._cameraGiveUp); this._cameraSilent = false; // it connected — treat normally from now on
+      clearTimeout(this._cameraGiveUp);
+      this._cameraSilent = false; // it connected — treat normally from now on
+      if (this._cameraConnecting) { this._cameraConnecting = false; this.hideToast(); } // success — clear "connecting…"
       $('chartCam').hidden = false; this._fitChartSoon();
     } else if ((s.state === 'disconnected' || s.state === 'error' || s.state === 'lost') && this.viewMode !== 'session') {
       $('chartCam').hidden = true; this._fitChartSoon();
     }
-    if (s.state === 'error' && !this._cameraSilent) this.toast(s.message || 'Camera bridge not reachable', true);
+    if (s.state === 'error' && !this._cameraSilent && !this._cameraConnecting) this.toast(s.message || 'Camera bridge not reachable', true);
     this._renderDeviceMenu(); // reflect connect/disconnect in the "+" menu
   }
 
@@ -1296,14 +1320,19 @@ export class UI {
     return wrap;
   }
 
-  toast(msg, isErr) {
+  // level: true/'error' (red), 'warn' (yellow), else neutral. sticky keeps it up
+  // (no auto-hide) until the next toast or hideToast() — used for "connecting…".
+  toast(msg, level, { sticky = false } = {}) {
     const t = $('toast');
     t.textContent = msg;
-    t.className = 'toast' + (isErr ? ' err' : '');
+    const cls = (level === true || level === 'error') ? ' err' : (level === 'warn' ? ' warn' : '');
+    t.className = 'toast' + cls;
     t.hidden = false;
     clearTimeout(this._toastTimer);
-    this._toastTimer = setTimeout(() => (t.hidden = true), 3200);
+    if (!sticky) this._toastTimer = setTimeout(() => (t.hidden = true), 3200);
   }
+
+  hideToast() { clearTimeout(this._toastTimer); $('toast').hidden = true; }
 
   // ---- diagnostics -------------------------------------------------------
 
