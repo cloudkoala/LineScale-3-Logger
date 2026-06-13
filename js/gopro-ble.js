@@ -11,7 +11,6 @@
 const SVC_CONTROL = '0000fea6-0000-1000-8000-00805f9b34fb';      // Control & Query (advertised)
 const SVC_WIFI = 'b5f90001-aa8d-11e3-9046-0002a5d5c51b';         // Wi-Fi Access Point service
 const CHAR_COMMAND = 'b5f90072-aa8d-11e3-9046-0002a5d5c51b';     // Command Request (write)
-const CHAR_COMMAND_RESP = 'b5f90073-aa8d-11e3-9046-0002a5d5c51b';// Command Response (notify)
 const CHAR_WIFI_SSID = 'b5f90002-aa8d-11e3-9046-0002a5d5c51b';   // Wi-Fi AP SSID (read)
 const CHAR_WIFI_PASSWORD = 'b5f90003-aa8d-11e3-9046-0002a5d5c51b';// Wi-Fi AP password (read)
 
@@ -35,20 +34,42 @@ export function decodeBleString(dataview) {
   return new TextDecoder().decode(bytes).replace(CTRL_BYTES, '').trim();
 }
 
-// Find a characteristic by UUID across all of the device's primary services
-// (the b5f9xxxx characteristics are split across a few GoPro services, and the
-// grouping varies by model — searching avoids hard-coding the wrong service).
-async function findCharacteristic(server, charUuid) {
-  const services = await server.getPrimaryServices();
-  for (const svc of services) {
-    try { return await svc.getCharacteristic(charUuid); } catch { /* not in this service */ }
+const delay = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Web Bluetooth allows only ONE GATT operation at a time and throws a generic
+// "GATT operation failed for unknown reason" on overlap or a transient glitch.
+// Run each op through here: it labels the step (so a failure says exactly where)
+// and retries once after a short pause. Never run two of these concurrently.
+async function step(label, fn) {
+  try { return await fn(); }
+  catch (e1) {
+    await delay(350);
+    try { return await fn(); }
+    catch (e2) { throw new Error(`${label} (${e2?.message || e2})`); }
   }
-  throw new Error(`GoPro characteristic ${charUuid} not found`);
+}
+
+// Get the GoPro's primary services — getPrimaryServices() first, falling back to
+// fetching the known service UUIDs individually if that's unsupported/empty.
+async function getServices(server) {
+  try { const s = await server.getPrimaryServices(); if (s && s.length) return s; } catch { /* fall back */ }
+  const out = [];
+  for (const uuid of GOPRO_SERVICES) { try { out.push(await server.getPrimaryService(uuid)); } catch { /* skip */ } }
+  if (!out.length) throw new Error('no GoPro GATT services found');
+  return out;
+}
+
+// Write using whichever write type the characteristic actually supports.
+function writeChar(char, bytes) {
+  const p = char.properties || {};
+  if (p.write && char.writeValueWithResponse) return char.writeValueWithResponse(bytes);
+  if (p.writeWithoutResponse && char.writeValueWithoutResponse) return char.writeValueWithoutResponse(bytes);
+  return char.writeValue(bytes);
 }
 
 // Connect to a GoPro over BLE, enable its Wi-Fi AP, and return its credentials.
 // onProgress(message) reports each step for UI feedback. Throws on failure
-// (including the user cancelling the device chooser).
+// (including the user cancelling the device chooser); the error names the step.
 export async function enableGoProWifi(onProgress = () => {}) {
   if (typeof navigator === 'undefined' || !navigator.bluetooth) {
     throw new Error('Web Bluetooth is not available here.');
@@ -60,45 +81,31 @@ export async function enableGoProWifi(onProgress = () => {}) {
   });
 
   onProgress(`Connecting to ${device.name || 'GoPro'} over Bluetooth…`);
-  const server = await device.gatt.connect();
+  const server = await step('connect', () => device.gatt.connect());
   try {
-    const cmd = await findCharacteristic(server, CHAR_COMMAND);
-
-    // Subscribe to the command response so we can confirm the AP turned on
-    // (status byte 0x00 = success). Best-effort: some stacks reject notify.
-    let resp = null;
-    try { resp = await findCharacteristic(server, CHAR_COMMAND_RESP); } catch { /* optional */ }
-    const ok = resp ? waitForCommandOk(resp, 0x17) : Promise.resolve();
+    await delay(500); // let service discovery settle before the first GATT op
+    const services = await step('discover services', () => getServices(server));
+    // The b5f9xxxx characteristics are split across a few GoPro services whose
+    // grouping varies by model, so search all of them rather than hard-coding.
+    const findChar = (uuid) => step(`find ${uuid.slice(0, 8)}`, async () => {
+      for (const svc of services) { try { return await svc.getCharacteristic(uuid); } catch { /* not here */ } }
+      throw new Error('characteristic not found');
+    });
 
     onProgress('Turning on the GoPro Wi-Fi…');
-    await cmd.writeValueWithResponse(AP_ON_COMMAND);
-    await Promise.race([ok, delay(3000)]); // don't hang forever if no notify
+    const cmd = await findChar(CHAR_COMMAND);
+    await step('enable Wi-Fi', () => writeChar(cmd, AP_ON_COMMAND));
+    await delay(1200); // give the camera a moment to bring the AP up
 
     onProgress('Reading the Wi-Fi name and password…');
-    const ssid = decodeBleString(await (await findCharacteristic(server, CHAR_WIFI_SSID)).readValue());
-    const password = decodeBleString(await (await findCharacteristic(server, CHAR_WIFI_PASSWORD)).readValue());
+    const ssidChar = await findChar(CHAR_WIFI_SSID);
+    const passChar = await findChar(CHAR_WIFI_PASSWORD);
+    const ssid = decodeBleString(await step('read SSID', () => ssidChar.readValue()));
+    const password = decodeBleString(await step('read password', () => passChar.readValue()));
     if (!ssid) throw new Error('GoPro returned an empty Wi-Fi name.');
     return { name: device.name || 'GoPro', ssid, password };
   } finally {
     // The AP stays on after we drop BLE; disconnect to free the radio.
     try { server.disconnect(); } catch { /* ignore */ }
   }
-}
-
-function delay(ms) { return new Promise((r) => setTimeout(r, ms)); }
-
-// Resolve when the command-response characteristic reports success for `cmdId`.
-function waitForCommandOk(respChar, cmdId) {
-  return new Promise((resolve, reject) => {
-    const onChange = (e) => {
-      const v = e.target.value; // [length][command id][status]…
-      if (v.byteLength >= 3 && v.getUint8(1) === cmdId) {
-        cleanup();
-        v.getUint8(2) === 0 ? resolve() : reject(new Error(`GoPro rejected AP-on (status ${v.getUint8(2)})`));
-      }
-    };
-    const cleanup = () => { try { respChar.removeEventListener('characteristicvaluechanged', onChange); } catch {} };
-    respChar.addEventListener('characteristicvaluechanged', onChange);
-    respChar.startNotifications().catch(reject);
-  });
 }
