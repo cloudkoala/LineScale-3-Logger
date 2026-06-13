@@ -66,6 +66,7 @@
             <h3>Camera</h3>
             <label class="setting"><span>Bridge URL</span><input type="text" id="setCameraUrl" data-setting="cameraBridgeUrl" class="setting-text" /></label>
             <label class="setting"><span>Auto-connect camera</span><input type="checkbox" id="setCameraAuto" data-setting="cameraAutoConnect" /></label>
+            <label class="setting"><span>Video sync offset (ms)<br><small class="muted">Saved sessions: + shifts video later vs. the graph</small></span><input type="number" id="setVideoOffset" data-setting="videoOffsetMs" class="setting-num" step="50" /></label>
           </div>
           <div class="settings-section" id="simulateSection">
             <h3>Testing &amp; capture</h3>
@@ -217,6 +218,7 @@
   <div id="bleModal" class="modal" hidden>
     <div class="modal-card">
       <h3>Select a Bluetooth device</h3>
+      <p class="modal-note">First time connecting a GoPro? Put it in pairing mode first: on the camera, <strong>Preferences → Connections → Connect Device → GoPro Quik App</strong>. Otherwise it won't appear (or will drop immediately).</p>
       <div id="bleList" class="ble-list"><div class="muted">Scanning…</div></div>
       <div class="modal-actions">
         <button id="bleCancel" class="btn">Cancel</button>

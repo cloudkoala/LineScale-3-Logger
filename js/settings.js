@@ -13,6 +13,7 @@ const DEFAULTS = {
   unit: 'kN',                 // global display unit (kN / kgf / lbf) — all devices forced to match
   cameraBridgeUrl: 'ws://localhost:8088', // GoPro bridge WebSocket (gopro-bridge/)
   cameraAutoConnect: false,   // auto-connect the camera feed on load
+  videoOffsetMs: 0,           // session playback: shift video vs. graph to line them up (ms; +ve = video later)
   // Persistent recording metadata (kept across recordings/reloads).
   testId: '',                 // stays the same across recordings unless changed
   sample: '01',               // auto-increments per recording; resets when testId changes

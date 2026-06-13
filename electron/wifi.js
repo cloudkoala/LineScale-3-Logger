@@ -49,6 +49,38 @@ function windowsWifiProfileXml(ssid, password) {
 </WLANProfile>`;
 }
 
+// Parse the SSID from `networksetup -getairportnetwork <iface>` output, or null.
+function parseCurrentSsidMac(output) {
+  const m = String(output || '').match(/Current Wi-Fi Network:\s*(.+?)\s*$/m);
+  return m ? m[1].trim() : null;
+}
+
+// Parse the connected SSID from `netsh wlan show interfaces`, or null if not
+// connected. Matches the "SSID" line but not "BSSID".
+function parseCurrentSsidWindows(output) {
+  const s = String(output || '');
+  if (!/^\s*State\s*:\s*connected/im.test(s)) return null;
+  const m = s.match(/^\s*SSID\s*:\s*(.+?)\s*$/im);
+  return m ? m[1].trim() : null;
+}
+
+// The SSID of the Wi-Fi network this computer is currently on (or null).
+async function currentWifi() {
+  try {
+    if (process.platform === 'darwin') {
+      let iface = null;
+      try { iface = parseWifiInterfaceMac((await run('networksetup', ['-listallhardwareports'])).stdout); } catch { /* default below */ }
+      const { stdout } = await run('networksetup', ['-getairportnetwork', iface || 'en0']);
+      return { ssid: parseCurrentSsidMac(stdout) };
+    }
+    if (process.platform === 'win32') {
+      const { stdout } = await run('netsh', ['wlan', 'show', 'interfaces']);
+      return { ssid: parseCurrentSsidWindows(stdout) };
+    }
+  } catch { /* ignore */ }
+  return { ssid: null };
+}
+
 async function joinMac(ssid, password) {
   let iface = null;
   try { iface = parseWifiInterfaceMac((await run('networksetup', ['-listallhardwareports'])).stdout); } catch { /* fall back */ }
@@ -102,4 +134,8 @@ async function joinWifi(creds = {}, opts = {}) {
   return last;
 }
 
-module.exports = { joinWifi, parseWifiInterfaceMac, windowsWifiProfileXml, xmlEscape };
+module.exports = {
+  joinWifi, currentWifi,
+  parseWifiInterfaceMac, parseCurrentSsidMac, parseCurrentSsidWindows,
+  windowsWifiProfileXml, xmlEscape,
+};

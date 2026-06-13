@@ -2,7 +2,8 @@
 // Verifies the pure Wi-Fi-join helpers (macOS interface parsing, Windows profile
 // XML + escaping). The actual networksetup/netsh calls need a real OS + adapter.
 import wifi from '../electron/wifi.js';
-const { parseWifiInterfaceMac, windowsWifiProfileXml, xmlEscape, joinWifi } = wifi;
+const { parseWifiInterfaceMac, windowsWifiProfileXml, xmlEscape, joinWifi,
+  parseCurrentSsidMac, parseCurrentSsidWindows } = wifi;
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') =>
@@ -35,6 +36,13 @@ check('xmlEscape escapes special chars', xmlEscape(`a&b<c>"d'`) === 'a&amp;b&lt;
 const xml2 = windowsWifiProfileXml('My&Net', 'p<a>ss&"');
 check('SSID with & is escaped in XML', xml2.includes('<name>My&amp;Net</name>'));
 check('password with special chars is escaped', xml2.includes('<keyMaterial>p&lt;a&gt;ss&amp;&quot;</keyMaterial>'));
+
+// Current-SSID parsing (used to skip BLE when already on the GoPro AP).
+check('mac: parses current SSID', parseCurrentSsidMac('Current Wi-Fi Network: GP24512345') === 'GP24512345');
+check('mac: not associated -> null', parseCurrentSsidMac('You are not associated with an AirPort network.') === null);
+const winIf = `\nName                   : Wi-Fi\n    State                  : connected\n    SSID                   : GP24512345\n    BSSID                  : aa:bb:cc:dd:ee:ff\n`;
+check('windows: parses connected SSID (not BSSID)', parseCurrentSsidWindows(winIf) === 'GP24512345');
+check('windows: disconnected -> null', parseCurrentSsidWindows('    State : disconnected\n    SSID : Foo\n') === null);
 
 // joinWifi retries until the network appears (the GoPro AP boots slowly).
 const ssidCreds = { ssid: 'GP24512345', password: 'pw' };

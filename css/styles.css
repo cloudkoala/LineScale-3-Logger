@@ -374,6 +374,9 @@ body.is-recording .device-bar { border-color: var(--red); }
 }
 .device-add-btn:hover { background: #1b212b; }
 .device-add-plus { color: var(--accent); font-size: 18px; line-height: 1; width: 14px; text-align: center; }
+.device-add-twirl { margin-left: auto; color: var(--muted); font-size: 11px; }
+.device-add-sub { display: flex; flex-direction: column; gap: 2px; padding-left: 16px; }
+.device-add-sub .device-add-btn { font-weight: 500; font-size: 13px; padding: 7px 9px; }
 .device-list-hdr {
   font-size: 11px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted);
   padding: 8px 9px 4px; margin-top: 4px; border-top: 1px solid var(--border);
@@ -408,6 +411,7 @@ body.is-recording .device-bar { border-color: var(--red); }
 .setting select { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 13px; }
 .setting select:disabled { opacity: .4; }
 .setting input[type=checkbox] { width: 18px; height: 18px; accent-color: var(--accent); cursor: pointer; }
+.setting-num { background: var(--panel-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); padding: 5px 8px; font: inherit; font-size: 13px; width: 80px; }
 .settings-panel .btn { width: 100%; margin-top: 8px; }
 #autoSaveSettings .setting .btn { width: auto; margin-top: 0; }
 .folder-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 170px; }
@@ -439,6 +443,8 @@ body.is-recording .device-bar { border-color: var(--red); }
 .modal-card input { width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 10px 12px; font-size: 15px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .modal-card-wide { width: 460px; }
+.modal-note { margin: 0 0 12px; font-size: 12.5px; line-height: 1.45; color: var(--muted); }
+.modal-note strong { color: var(--text); font-weight: 600; }
 /* Bluetooth device picker (Electron) */
 .ble-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; margin: 12px 0; }
 .ble-item { text-align: left; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 10px 12px; cursor: pointer; font: inherit; font-size: 14px; }

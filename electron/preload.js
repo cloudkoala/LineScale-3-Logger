@@ -10,4 +10,6 @@ contextBridge.exposeInMainWorld('dynoNative', {
   cancelBle: () => ipcRenderer.send('ble-cancel'),
   // Join a Wi-Fi network (the GoPro AP). Returns { ok, message }.
   joinWifi: (creds) => ipcRenderer.invoke('join-wifi', creds),
+  // The SSID this computer is currently on. Returns { ssid }.
+  currentWifi: () => ipcRenderer.invoke('current-wifi'),
 });

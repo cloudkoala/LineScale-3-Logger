@@ -48,6 +48,8 @@ export class CameraFeed {
     this._wantOpen = false;
     this._retry = null;
     this._statusCbs = [];
+    this._lastFrameAt = 0;    // ms timestamp of the last live fragment
+    this._liveWatch = null;   // interval that drops the feed if frames stop
   }
 
   attach(videoEl) { this.video = videoEl; }
@@ -129,6 +131,8 @@ export class CameraFeed {
         this.queue = [this.initSeg];
         this._flush();
         this.video.play?.().catch(() => {});
+        this._lastFrameAt = Date.now();
+        this._startLiveWatch();
         this._status({ state: 'live' });
       } catch (e) { this._status({ state: 'error', message: e.message }); }
     }, { once: true });
@@ -136,7 +140,7 @@ export class CameraFeed {
 
   _onFragment(payload) {
     const buf = payload.slice();
-    if (this.sb) { this.queue.push(buf); this._flush(); }
+    if (this.sb) { this._lastFrameAt = Date.now(); this.queue.push(buf); this._flush(); }
     if (this.recording) {
       const r = buf.slice();
       const boxes = tfdtBoxes(r);
@@ -174,7 +178,25 @@ export class CameraFeed {
     } catch {}
   }
 
+  // While live, drop the feed if no fragment arrives for a while — the GoPro was
+  // turned off or the computer left its Wi-Fi. We disconnect (rather than keep a
+  // frozen frame on screen) so the camera leaves the device list and the video
+  // window closes. Re-adding the camera restarts the stream.
+  _startLiveWatch() {
+    clearInterval(this._liveWatch);
+    this._liveWatch = setInterval(() => {
+      if (this.sb && Date.now() - this._lastFrameAt > 8000) this._loseFeed();
+    }, 2000);
+  }
+
+  _loseFeed() {
+    clearInterval(this._liveWatch); this._liveWatch = null;
+    this._status({ state: 'lost', message: 'GoPro feed lost — camera disconnected.' });
+    this.disconnect(); // closes the socket (no auto-retry) → UI removes the camera
+  }
+
   _teardownMedia() {
+    clearInterval(this._liveWatch); this._liveWatch = null;
     try { if (this.video) { this.video.removeAttribute('src'); this.video.load(); } } catch {}
     this.ms = null; this.sb = null; this.queue = [];
   }

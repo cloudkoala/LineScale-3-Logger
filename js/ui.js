@@ -122,6 +122,12 @@ export class UI {
     });
     $('setCameraUrl').onchange = () => this.h.onSetting('cameraBridgeUrl', ($('setCameraUrl').value || '').trim());
     $('setCameraAuto').onchange = () => this.h.onSetting('cameraAutoConnect', $('setCameraAuto').checked);
+    $('setVideoOffset').onchange = () => {
+      this._videoOffsetMs = Number($('setVideoOffset').value) || 0;
+      this.h.onSetting('videoOffsetMs', this._videoOffsetMs);
+      // Re-apply at the current scrub position so the change is visible immediately.
+      if (this.viewMode === 'session') this._setSessionTime(this._sessionT || 0, false);
+    };
 
     // Saved-session search + sort
     $('sessionSearch').oninput = () => this.h.onSessionSearch($('sessionSearch').value);
@@ -176,6 +182,8 @@ export class UI {
     this._cameraUrl = s.cameraBridgeUrl || 'ws://localhost:8088';
     $('setCameraUrl').value = this._cameraUrl;
     $('setCameraAuto').checked = !!s.cameraAutoConnect;
+    this._videoOffsetMs = Number(s.videoOffsetMs) || 0;
+    $('setVideoOffset').value = String(this._videoOffsetMs);
     if (s.cameraAutoConnect) this._toggleCamera(true);
     this.setRecordField('testId', s.testId || '');
     this.setRecordField('sample', s.sample || '01');
@@ -465,8 +473,9 @@ export class UI {
       if (s.level === 'error' || s.level === 'warn') this.toast(s.message, true);
       return;
     }
+    if (s.state === 'lost') this.toast(s.message || 'GoPro feed lost', true); // disconnect() fires next to clean up
     if (s.state === 'live') { $('chartCam').hidden = false; this._fitChartSoon(); }
-    else if ((s.state === 'disconnected' || s.state === 'error') && this.viewMode !== 'session') {
+    else if ((s.state === 'disconnected' || s.state === 'error' || s.state === 'lost') && this.viewMode !== 'session') {
       $('chartCam').hidden = true; this._fitChartSoon();
     }
     if (s.state === 'error') this.toast(s.message || 'Camera bridge not reachable', true);
@@ -474,6 +483,23 @@ export class UI {
   }
 
   connectCamera() { this._toggleCamera(true); }
+
+  // "GoPro Camera → Wi-Fi": if we're already on a GoPro access point, skip the
+  // Bluetooth setup and just connect the feed. Otherwise run the BLE enable +
+  // auto-join flow (Electron), or — in a browser build — connect the bridge and
+  // let the user join the GoPro Wi-Fi themselves.
+  async _connectGoProWifi() {
+    try {
+      const cur = await window.dynoNative?.currentWifi?.();
+      if (cur && /^gp/i.test(cur.ssid || '')) {
+        this.toast(`Already on ${cur.ssid} — connecting…`);
+        this._toggleCamera(true);
+        return;
+      }
+    } catch { /* couldn't read SSID — fall through to setup */ }
+    if (window.dynoNative?.joinWifi) this._setupGoProWifi();
+    else this._toggleCamera(true);
+  }
 
   // One-tap GoPro Wi-Fi setup (Electron): enable the camera's Wi-Fi AP over
   // Bluetooth, read its credentials, join that network, then connect the feed —
@@ -739,18 +765,35 @@ export class UI {
       b.onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(false); fn(); };
       return b;
     };
+    // A collapsible parent row that twirls open to reveal sub-options.
+    const mkGroup = (label, subButtons) => {
+      const wrap = document.createElement('div');
+      const head = document.createElement('button');
+      head.className = 'device-add-btn';
+      head.innerHTML = `<span class="device-add-plus">+</span><span>${label}</span><span class="device-add-twirl">▸</span>`;
+      const sub = document.createElement('div');
+      sub.className = 'device-add-sub'; sub.hidden = true;
+      sub.append(...subButtons);
+      head.onclick = (e) => {
+        e.stopPropagation();
+        sub.hidden = !sub.hidden;
+        head.querySelector('.device-add-twirl').textContent = sub.hidden ? '▸' : '▾';
+      };
+      wrap.append(head, sub);
+      return wrap;
+    };
     addGroup.append(
       mkAdd('LineScale 3', () => this.h.onConnect()),
       mkAdd('Rock Exotica Enforcer', () => this.h.onConnectEnforcer()),
     );
     if (!camOn) {
-      addGroup.append(mkAdd('Camera (GoPro)', () => this._toggleCamera(true)));
-      // Electron only: turn on the GoPro's Wi-Fi over Bluetooth and auto-join it,
-      // so there's no need for the GoPro phone app. (USB needs no setup — the
-      // bridge auto-detects it, so plain "Camera (GoPro)" covers that.)
-      if (window.dynoNative?.joinWifi) {
-        addGroup.append(mkAdd('GoPro Wi-Fi setup (Bluetooth)', () => this._setupGoProWifi()));
-      }
+      // GoPro Camera twirls open to Wi-Fi / Wired. Both ultimately connect the
+      // bridge (which auto-detects USB); the Wi-Fi path adds the BLE setup +
+      // auto-join when needed.
+      addGroup.append(mkGroup('GoPro Camera', [
+        mkAdd('Wi-Fi', () => this._connectGoProWifi()),
+        mkAdd('Wired (USB)', () => this._toggleCamera(true)),
+      ]));
     }
     menu.append(addGroup);
 
@@ -832,14 +875,23 @@ export class UI {
   // panels + scrub the video to match. From the video (fromVideo=true): update
   // panels + move the graph cursor to match.
   _setSessionTime(tSec, fromVideo) {
-    this._renderSessionPanels(tSec * 1000);
+    // videoOffsetMs lets the user line up the recorded video with the force graph
+    // (the live feed lagged reality, so the saved video trails the data). Panels +
+    // cursor track graph/force time; the video sits at graph time + offset.
+    const off = (this._videoOffsetMs || 0) / 1000;
     if (fromVideo) {
-      this._seekCursorTo(tSec);
+      const g = tSec - off;                       // video time -> graph/force time
+      this._sessionT = g;
+      this._renderSessionPanels(g * 1000);
+      this._seekCursorTo(g);
     } else {
+      this._sessionT = tSec;                       // tSec is graph/force time
+      this._renderSessionPanels(tSec * 1000);
       const v = $('cameraVideo');
       if (v && v.src && !$('chartCam').hidden) {
         if (!v.paused) v.pause();                 // hover takes over playback
-        if (Math.abs(v.currentTime - tSec) > 0.04) { try { v.currentTime = tSec; } catch { /* ignore */ } }
+        const target = Math.max(0, tSec + off);   // graph/force time -> video time
+        if (Math.abs(v.currentTime - target) > 0.04) { try { v.currentTime = target; } catch { /* ignore */ } }
       }
     }
   }
