@@ -346,7 +346,14 @@ body.is-recording .device-bar { border-color: var(--red); }
 .dev-add-text { font-size: 14px; font-weight: 600; }
 
 /* Connection circle + device list (top bar) */
-.conn-wrap { position: relative; display: inline-flex; }
+.conn-wrap { position: relative; display: inline-flex; align-items: center; gap: 8px; }
+.conn-add {
+  width: 34px; height: 38px; border-radius: 8px; cursor: pointer;
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--accent);
+  font-size: 20px; font-weight: 700; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center; transition: background .12s;
+}
+.conn-add:hover { background: #28313d; border-color: var(--accent); }
 .conn-circle {
   width: 38px; height: 38px; border-radius: 8px; cursor: pointer;
   background: var(--panel-2); border: 1px solid var(--border); color: var(--text);

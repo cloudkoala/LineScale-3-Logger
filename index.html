@@ -12,6 +12,7 @@
     <h1>Dyno<span class="muted">-Meter</span></h1>
     <div class="topbar-right">
       <div class="conn-wrap">
+        <button id="addDeviceBtn" class="conn-add" title="Add a device" aria-label="Add a device" hidden>+</button>
         <button id="connCircle" class="conn-circle" title="Connect a device" aria-label="Connect a device">+</button>
         <div id="deviceList" class="device-list-menu" hidden></div>
       </div>
@@ -77,8 +78,6 @@
   </header>
 
   <main>
-    <section id="deviceBars" class="device-bars"></section>
-
     <section class="record-bar">
       <div class="field-group">
         <div class="field field-testid">
@@ -106,6 +105,8 @@
       <div class="field field-config"><label for="recConfig">Configuration</label><input id="recConfig" type="text" /></div>
       <div id="recWarn" class="rec-warn" hidden></div>
     </section>
+
+    <section id="deviceBars" class="device-bars"></section>
 
     <section class="chart-wrap">
       <div class="chart-header">

@@ -62,6 +62,7 @@ export class UI {
     // Top-bar connection circle: red when no device (click connects one);
     // green with a count when connected (click lists devices to disconnect).
     $('connCircle').onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(); };
+    $('addDeviceBtn').onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(); };
     $('simulateBtn').onclick = () => this.h.onSimulate();
     $('discoverBtn').onclick = () => this.h.onDiscover();
 
@@ -652,6 +653,9 @@ export class UI {
     const circle = $('connCircle');
     circle.textContent = total > 0 ? String(total) : '+';
     circle.title = total > 0 ? 'Devices' : 'Connect a device';
+    // When something's connected, show the count + a small "+" to its left to add
+    // more (the big in-body "Connect Device" card only appears when nothing is yet).
+    $('addDeviceBtn').hidden = total === 0;
 
     const menu = $('deviceList');
     menu.innerHTML = '';
@@ -857,13 +861,15 @@ export class UI {
       this._bars.set(c.id, { cur, curUnit, max, maxUnit, rate, batt, overload });
     }
 
-    // Add-device bar, after the connected devices. Text depends on whether
-    // anything is connected yet.
-    const add = document.createElement('button');
-    add.className = 'dev-add';
-    add.innerHTML = `<span class="dev-add-icon">+</span><span class="dev-add-text">${chans.length ? 'Add Additional Device' : 'Connect Device'}</span>`;
-    add.onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(true); };
-    wrap.append(add);
+    // Big "Connect Device" card only as the initial prompt (no devices yet). Once
+    // something is connected, adding more is done via the top-bar "+" button.
+    if (!chans.length) {
+      const add = document.createElement('button');
+      add.className = 'dev-add';
+      add.innerHTML = '<span class="dev-add-icon">+</span><span class="dev-add-text">Connect Device</span>';
+      add.onclick = (e) => { e.stopPropagation(); this._toggleDeviceList(true); };
+      wrap.append(add);
+    }
   }
 
   setRecordingState(isRecording) {
