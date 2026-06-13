@@ -132,6 +132,12 @@ export class UI {
     $('setUnit').onchange = () => this.h.onSetting('unit', $('setUnit').value);
     $('powerOffBtn').onclick = () => this.h.onPowerOff();
 
+    // Web Bluetooth device picker — only under Electron (the browser shows its own).
+    if (window.dynoNative?.isElectron) {
+      window.dynoNative.onBleDevices((devices) => this._showBlePicker(devices));
+      $('bleCancel').onclick = () => { window.dynoNative.cancelBle(); $('bleModal').hidden = true; };
+    }
+
     this._buildChart();
     window.addEventListener('resize', () => this._resizeChart());
     // Re-fit the chart whenever its container changes width (e.g. the camera
@@ -415,6 +421,22 @@ export class UI {
   }
 
   connectCamera() { this._toggleCamera(true); }
+
+  // Electron Web Bluetooth picker: main forwards the (live-updating) device list here;
+  // selecting one calls back via dynoNative.selectBle. Cancel is wired in init().
+  _showBlePicker(devices) {
+    const list = $('bleList');
+    $('bleModal').hidden = false;
+    list.innerHTML = '';
+    if (!devices.length) { list.innerHTML = '<div class="muted">Scanning…</div>'; return; }
+    for (const d of devices) {
+      const b = document.createElement('button');
+      b.className = 'ble-item';
+      b.textContent = d.deviceName;
+      b.onclick = () => { window.dynoNative.selectBle(d.deviceId); $('bleModal').hidden = true; };
+      list.append(b);
+    }
+  }
 
   // For app.js recording integration:
   cameraLive() { return this.camera.isLive(); }

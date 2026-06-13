@@ -432,6 +432,10 @@ body.is-recording .device-bar { border-color: var(--red); }
 .modal-card input { width: 100%; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 10px 12px; font-size: 15px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .modal-card-wide { width: 460px; }
+/* Bluetooth device picker (Electron) */
+.ble-list { display: flex; flex-direction: column; gap: 6px; max-height: 320px; overflow: auto; margin: 12px 0; }
+.ble-item { text-align: left; background: var(--panel-2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 10px 12px; cursor: pointer; font: inherit; font-size: 14px; }
+.ble-item:hover { background: #28313d; border-color: var(--accent); }
 .edit-grid { display: flex; flex-direction: column; gap: 12px; }
 .edit-grid .field-testid input, .edit-grid .field-sample input { width: 100%; }
 .edit-grid > .field { width: 100%; }

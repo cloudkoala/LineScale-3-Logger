@@ -1,53 +1,23 @@
 // GoPro live-feed bridge.
 //
 // A browser can't read the GoPro's wireless preview (a UDP MPEG-TS stream) directly.
-// This helper:
+// This:
 //   1. (optionally) tells the GoPro to start streaming over its HTTP API + keeps it alive,
 //   2. runs ffmpeg to read the UDP MPEG-TS and transcode it to fragmented MP4 (fMP4),
 //   3. serves that fMP4 to the web app over a WebSocket — the app plays it live (MSE) and
 //      records it by buffering the same bytes.
 //
-// No GoPro? Set GOPRO=0 and feed your own UDP MPEG-TS (e.g. an ffmpeg test pattern) to
-// UDP_PORT — handy for development. See README.md.
-//
-// Config (env vars): WS_PORT=8088  UDP_PORT=8554  GOPRO=1  GOPRO_IP=10.5.5.9
+// Usable two ways:
+//   • Standalone CLI (`node bridge.js`) for the plain web app — config via env vars
+//     (WS_PORT, UDP_PORT, GOPRO, GOPRO_IP, KEYFRAME_S). Set GOPRO=0 + feed your own UDP
+//     MPEG-TS (e.g. an ffmpeg test pattern) for development. See README.md.
+//   • Embedded in the Electron app via `import { startBridge }` (ffmpeg path injected,
+//     lifecycle managed by the main process). startBridge() never exits the process.
 
 import { spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
-
-const WS_PORT = Number(process.env.WS_PORT || 8088);
-const UDP_PORT = Number(process.env.UDP_PORT || 8554);
-const GOPRO = process.env.GOPRO !== '0';
-const GOPRO_IP = process.env.GOPRO_IP || '10.5.5.9';
-// Keyframe = fragment interval in seconds — the main lever on live latency.
-// Lower = lower latency + more CPU/bitrate. 0.033 ≈ every frame (all-intra).
-const KEYFRAME_S = Math.max(0.02, Number(process.env.KEYFRAME_S || 0.1));
-
-const log = (...a) => console.log('[bridge]', ...a);
-
-// ---- GoPro control (best-effort; failures are non-fatal so dev/test still works) -------
-async function goproStart() {
-  if (!GOPRO) { log('GoPro control disabled (GOPRO=0) — expecting an external UDP source'); return; }
-  const base = `http://${GOPRO_IP}`;
-  try {
-    // Open GoPro: start the wired/wireless preview stream.
-    const r = await fetch(`${base}/gopro/camera/stream/start`, { signal: AbortSignal.timeout(4000) });
-    log(`GoPro stream/start -> ${r.status}`);
-  } catch (e) {
-    // Fall back to the legacy endpoint used by older models.
-    try {
-      await fetch(`${base}/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart`, { signal: AbortSignal.timeout(4000) });
-      log('GoPro legacy gpStream restart sent');
-    } catch (e2) {
-      log(`⚠ could not reach the GoPro at ${GOPRO_IP} (${e2.message || e.message}). ` +
-          'Join the GoPro Wi-Fi and enable wireless, or run with GOPRO=0 for a test source.');
-    }
-  }
-  // Keep-alive: the preview stops after a few seconds without periodic pings.
-  setInterval(() => {
-    fetch(`${base}/gopro/camera/keep_alive`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
-  }, 2500);
-}
+import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
 
 // ---- fMP4 box splitter: separates the init segment (ftyp+moov) from media fragments -----
 // (moof+mdat). Each fragment begins on a keyframe (ffmpeg frag_keyframe) so the app can
@@ -89,8 +59,7 @@ function makeBoxSplitter(onInit, onFragment) {
   };
 }
 
-// Build the MSE codec string from the avcC box in the init segment (e.g. avc1.42E01F),
-// so the browser's SourceBuffer is created with the exact profile/level ffmpeg produced.
+// Build the MSE codec string from the init segment (e.g. avc1.42E01F[, mp4a.40.2]).
 function codecFromInit(init) {
   const i = init.indexOf('avcC', 0, 'latin1');
   let video = 'avc1.42E01E';
@@ -99,88 +68,131 @@ function codecFromInit(init) {
     const hex = (b) => b.toString(16).padStart(2, '0');
     video = `avc1.${hex(init[p + 1])}${hex(init[p + 2])}${hex(init[p + 3])}`.toUpperCase().replace('AVC1', 'avc1');
   }
-  // If the init segment carries an audio track (mp4a), advertise AAC-LC too.
-  const hasAudio = init.indexOf('mp4a', 0, 'latin1') >= 0;
+  const hasAudio = init.indexOf('mp4a', 0, 'latin1') >= 0; // advertise AAC-LC if present
   return hasAudio ? `${video}, mp4a.40.2` : video;
 }
 
-// ---- ffmpeg: UDP MPEG-TS -> fMP4 on stdout ---------------------------------------------
-function startFfmpeg(onData, onExit) {
-  const gop = Math.max(1, Math.round(KEYFRAME_S * 30)); // GOP in frames (assume ~30fps)
-  const args = [
-    '-hide_banner', '-loglevel', 'warning',
-    '-fflags', 'nobuffer', '-flags', 'low_delay',
-    '-i', `udp://@:${UDP_PORT}?overrun_nonfatal=1&fifo_size=50000000`,
-    '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
-    '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
-    '-c:a', 'aac', '-b:a', '128k', // include audio if the source has it
-    // Keyframe every KEYFRAME_S sec → fragments flush that often. Fragment size
-    // is the dominant source of live latency, so smaller = lower latency (more
-    // CPU/bitrate). Assume ~30fps for the GOP; force_key_frames is authoritative.
-    '-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0',
-    '-force_key_frames', `expr:gte(t,n_forced*${KEYFRAME_S})`,
-    '-movflags', '+frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset',
-    '-flush_packets', '1', // emit each fragment to the pipe immediately (low latency)
-    '-f', 'mp4', 'pipe:1',
-  ];
-  const ff = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
-  ff.stdout.on('data', onData);
-  ff.stderr.on('data', (d) => process.stderr.write(d)); // surface ffmpeg warnings/errors
-  ff.on('exit', (code) => { log(`ffmpeg exited (${code})`); onExit(code); });
-  ff.on('error', (e) => { log(`ffmpeg failed to start: ${e.message}. Is ffmpeg installed?`); onExit(1); });
-  return ff;
-}
+/**
+ * Start the bridge. Returns { stop() } to tear it down (used by the Electron main process).
+ * Options default to env vars so the standalone CLI behaves as before.
+ */
+export function startBridge(opts = {}) {
+  const wsPort = Number(opts.wsPort ?? process.env.WS_PORT ?? 8088);
+  const udpPort = Number(opts.udpPort ?? process.env.UDP_PORT ?? 8554);
+  const gopro = opts.gopro ?? (process.env.GOPRO !== '0');
+  const goproIp = opts.goproIp ?? process.env.GOPRO_IP ?? '10.5.5.9';
+  // Keyframe = fragment interval (s) — the main lever on live latency. Lower = lower
+  // latency + more CPU/bitrate; 0.033 ≈ every frame (all-intra).
+  const keyframeS = Math.max(0.02, Number(opts.keyframeS ?? process.env.KEYFRAME_S ?? 0.1));
+  const ffmpegPath = opts.ffmpegPath || 'ffmpeg';
+  const log = (...a) => console.log('[bridge]', ...a);
 
-// ---- WebSocket server ------------------------------------------------------------------
-const wss = new WebSocketServer({ port: WS_PORT });
-wss.on('error', (e) => {
-  if (e.code === 'EADDRINUSE') {
-    log(`⚠ port ${WS_PORT} is already in use — another bridge is probably already running.`);
-    log('  Close the other one (or set WS_PORT to a different port), then retry.');
-  } else {
-    log('WebSocket server error: ' + e.message);
+  let stopped = false;
+  let ff = null;
+  let keepAlive = null;
+  let initSeg = null;
+  let codec = 'avc1.42E01E';
+
+  // GoPro control (best-effort; failures are non-fatal so dev/test still works).
+  function goproStart() {
+    if (!gopro) { log('GoPro control disabled — expecting an external UDP source'); return; }
+    const base = `http://${goproIp}`;
+    fetch(`${base}/gopro/camera/stream/start`, { signal: AbortSignal.timeout(4000) })
+      .then((r) => log(`GoPro stream/start -> ${r.status}`))
+      .catch(() => fetch(`${base}/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart`, { signal: AbortSignal.timeout(4000) })
+        .then(() => log('GoPro legacy gpStream restart sent'))
+        .catch((e) => log(`⚠ could not reach the GoPro at ${goproIp} (${e.message}). Join its Wi-Fi and enable wireless.`)));
+    // Keep-alive: the preview stops after a few seconds without periodic pings.
+    keepAlive = setInterval(() => {
+      fetch(`${base}/gopro/camera/keep_alive`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
+    }, 2500);
   }
-  process.exit(1);
-});
-let initSeg = null;
-let codec = 'avc1.42E01E';
 
-const tagged = (tag, payload) => Buffer.concat([Buffer.from([tag]), payload]); // 0=init, 1=fragment
-
-wss.on('connection', (ws) => {
-  log(`client connected (${wss.clients.size} total)`);
-  ws.send(JSON.stringify({ type: 'hello', codec }));
-  if (initSeg) ws.send(tagged(0, initSeg));
-  ws.on('close', () => log(`client disconnected (${wss.clients.size} total)`));
-  ws.on('error', () => {});
-});
-
-function broadcast(buf) {
-  for (const ws of wss.clients) if (ws.readyState === 1) ws.send(buf);
-}
-
-const onInit = (init) => {
-  initSeg = init;
-  codec = codecFromInit(init);
-  log(`init segment ready (${init.length} B), codec ${codec}`);
-  for (const ws of wss.clients) {
-    if (ws.readyState !== 1) continue;
-    ws.send(JSON.stringify({ type: 'hello', codec }));
-    ws.send(tagged(0, init));
+  // ffmpeg: UDP MPEG-TS -> fMP4 on stdout.
+  function startFfmpeg(onData, onExit) {
+    const gop = Math.max(1, Math.round(keyframeS * 30)); // GOP in frames (assume ~30fps)
+    const args = [
+      '-hide_banner', '-loglevel', 'warning',
+      '-fflags', 'nobuffer', '-flags', 'low_delay',
+      '-i', `udp://@:${udpPort}?overrun_nonfatal=1&fifo_size=50000000`,
+      '-c:v', 'libx264', '-preset', 'veryfast', '-tune', 'zerolatency',
+      '-profile:v', 'baseline', '-pix_fmt', 'yuv420p',
+      '-c:a', 'aac', '-b:a', '128k', // include audio if the source has it
+      '-g', String(gop), '-keyint_min', String(gop), '-sc_threshold', '0',
+      '-force_key_frames', `expr:gte(t,n_forced*${keyframeS})`,
+      '-movflags', '+frag_keyframe+empty_moov+default_base_moof+omit_tfhd_offset',
+      '-flush_packets', '1',
+      '-f', 'mp4', 'pipe:1',
+    ];
+    const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    proc.stdout.on('data', onData);
+    proc.stderr.on('data', (d) => process.stderr.write(d));
+    proc.on('exit', (code) => { if (!stopped) log(`ffmpeg exited (${code})`); onExit(code); });
+    proc.on('error', (e) => { log(`ffmpeg failed to start: ${e.message}. Is ffmpeg installed?`); onExit(1); });
+    return proc;
   }
-};
-const onFragment = (frag) => broadcast(tagged(1, frag));
 
-// ---- wire it together ------------------------------------------------------------------
-function startPipeline() {
-  const split = makeBoxSplitter(onInit, onFragment);
-  initSeg = null;
-  startFfmpeg(split, (code) => {
-    if (code !== 0) { log('restarting ffmpeg in 2s…'); setTimeout(startPipeline, 2000); }
+  function startPipeline() {
+    if (stopped) return;
+    initSeg = null;
+    const split = makeBoxSplitter(onInit, onFragment);
+    ff = startFfmpeg(split, (code) => {
+      if (!stopped && code !== 0) { log('restarting ffmpeg in 2s…'); setTimeout(startPipeline, 2000); }
+    });
+  }
+
+  // WebSocket server.
+  const tagged = (tag, payload) => Buffer.concat([Buffer.from([tag]), payload]); // 0=init, 1=fragment
+  const wss = new WebSocketServer({ port: wsPort });
+  wss.on('error', (e) => {
+    if (e.code === 'EADDRINUSE') {
+      log(`⚠ port ${wsPort} is already in use — another bridge is probably already running.`);
+      log('  Close the other one (or set WS_PORT to a different port), then retry.');
+    } else {
+      log('WebSocket server error: ' + e.message);
+    }
+    opts.onFatal?.(e);
   });
+  wss.on('connection', (ws) => {
+    log(`client connected (${wss.clients.size} total)`);
+    ws.send(JSON.stringify({ type: 'hello', codec }));
+    if (initSeg) ws.send(tagged(0, initSeg));
+    ws.on('close', () => log(`client disconnected (${wss.clients.size} total)`));
+    ws.on('error', () => {});
+  });
+
+  const onInit = (init) => {
+    initSeg = init;
+    codec = codecFromInit(init);
+    log(`init segment ready (${init.length} B), codec ${codec}`);
+    for (const ws of wss.clients) {
+      if (ws.readyState !== 1) continue;
+      ws.send(JSON.stringify({ type: 'hello', codec }));
+      ws.send(tagged(0, init));
+    }
+  };
+  const onFragment = (frag) => {
+    for (const ws of wss.clients) if (ws.readyState === 1) ws.send(tagged(1, frag));
+  };
+
+  log(`WebSocket server: ws://localhost:${wsPort}`);
+  log(`reading UDP MPEG-TS on udp://@:${udpPort}`);
+  goproStart();
+  startPipeline();
+
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(keepAlive);
+      try { ff && ff.kill('SIGKILL'); } catch { /* ignore */ }
+      try { wss.close(); } catch { /* ignore */ }
+    },
+  };
 }
 
-log(`WebSocket server: ws://localhost:${WS_PORT}`);
-log(`reading UDP MPEG-TS on udp://@:${UDP_PORT}`);
-await goproStart();
-startPipeline();
+// ---- run as a standalone CLI when invoked directly (node bridge.js) --------------------
+const invokedDirectly = (() => {
+  try { return !!process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); }
+  catch { return false; }
+})();
+if (invokedDirectly) startBridge({ onFatal: () => process.exit(1) });

@@ -1,8 +1,9 @@
-# LineScale 3 Logger
+# Dyno-Meter
 
-A zero-install web app to connect to a **LineGrip LineScale 3** dynamometer over
-Bluetooth, watch live load, track the max, record named sessions, graph them, and
-export data to CSV or PNG graphs.
+Load-cell logger for the **LineGrip LineScale 3** and **Rock Exotica Enforcer** (over
+Web Bluetooth), with a live **GoPro** video feed, synchronized recording, graphs, and
+CSV / PNG / MP4 export. Runs as a **cross-platform desktop app (Electron)** or as a plain
+web app in Chrome/Edge — one codebase.
 
 ![screenshot](docs/screenshot.png)
 
@@ -21,20 +22,31 @@ export data to CSV or PNG graphs.
 
 ## Running it
 
-Web Bluetooth needs a *secure context*, so serve the folder over `localhost`
-(opening `index.html` as a `file://` URL is unreliable):
+### Desktop app (Electron) — recommended
+Bundles everything (ffmpeg included), runs the GoPro bridge in-process (no separate
+launcher), and works on macOS / Windows / Linux:
 
 ```sh
-cd "Linescale 3 App"
-python3 -m http.server 8000
+npm install     # once
+npm start       # launch the app
+npm run dist    # build an installer for the current platform
 ```
 
-Then open **http://localhost:8000** in **Google Chrome** or **Microsoft Edge**
-(Web Bluetooth is not available in Safari or Firefox).
+The camera connects from the in-app **+** menu; `KEYFRAME_S` still tunes live latency
+(default `0.1`, `0.033` ≈ every frame). Electron handles the Bluetooth device chooser.
 
-- Click **Connect**, pick your LineScale 3, and live data starts streaming.
-- Or click **Simulate** (or open `http://localhost:8000/?sim=1`) to drive the UI
-  with a fake device.
+### Web app (Chrome/Edge)
+No build step. Web Bluetooth needs a *secure context*, so serve over `localhost`:
+
+```sh
+python3 -m http.server 8000     # then open http://localhost:8000
+```
+
+(Web Bluetooth isn't in Safari/Firefox.) For the GoPro feed in web mode, run the standalone
+bridge separately — see `gopro-bridge/README.md`.
+
+- Connect via the **+** menu (LineScale 3 / Rock Exotica Enforcer / Camera), or open
+  `?sim=1` to drive the UI with a fake device.
 
 ## How it talks to the device
 

@@ -1,0 +1,41 @@
+{
+  "name": "dyno-meter",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dyno-Meter — LineScale 3 / Rock Exotica Enforcer logger with live GoPro feed",
+  "author": "Luke Kantola",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "test": "for f in test/*.test.mjs; do node \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "ffmpeg-static": "^5.2.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "com.cloudkoala.dynometer",
+    "productName": "Dyno-Meter",
+    "files": [
+      "index.html",
+      "js/**/*",
+      "css/**/*",
+      "vendor/**/*",
+      "electron/**/*",
+      "gopro-bridge/bridge.js",
+      "gopro-bridge/package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/ffmpeg-static/**"
+    ],
+    "mac": { "category": "public.app-category.utilities", "target": ["dmg", "zip"] },
+    "win": { "target": ["nsis"] },
+    "linux": { "target": ["AppImage"] }
+  }
+}

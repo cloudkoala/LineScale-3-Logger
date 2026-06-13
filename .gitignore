@@ -6,3 +6,7 @@
 
 # GoPro bridge installed deps (users run npm install)
 gopro-bridge/node_modules/
+
+# Electron app deps + build output
+/node_modules/
+/dist/
