@@ -13,7 +13,7 @@ const DEFAULTS = {
   unit: 'kN',                 // global display unit (kN / kgf / lbf) — all devices forced to match
   cameraBridgeUrl: 'ws://localhost:8088', // GoPro bridge WebSocket (gopro-bridge/)
   cameraAutoConnect: false,   // auto-connect the camera feed on load
-  videoOffsetMs: 0,           // session playback: shift video vs. graph to line them up (ms; +ve = video later)
+  videoOffsetMs: 235,         // session playback: shift video vs. graph to line them up (ms; +ve = video later)
   // Persistent recording metadata (kept across recordings/reloads).
   testId: '',                 // stays the same across recordings unless changed
   sample: '01',               // auto-increments per recording; resets when testId changes
@@ -26,6 +26,15 @@ function load() {
 }
 
 export const settings = { ...DEFAULTS, ...load() };
+
+// One-time migration: the video sync offset first shipped at 0 (a placeholder),
+// which got persisted. Promote that to the new 235ms default once; anyone who
+// deliberately changes it afterwards keeps their value.
+if (!settings.videoOffsetMigrated) {
+  if (!settings.videoOffsetMs) settings.videoOffsetMs = 235;
+  settings.videoOffsetMigrated = true;
+  saveSettings();
+}
 
 export function saveSettings() {
   try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch { /* ignore */ }

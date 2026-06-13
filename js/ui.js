@@ -505,6 +505,7 @@ export class UI {
   // Bluetooth, read its credentials, join that network, then connect the feed —
   // replacing the manual phone-app + macOS Wi-Fi-picker dance.
   async _setupGoProWifi() {
+    this._goproBleActive = true; // tells _showBlePicker to show the GoPro pairing note
     try {
       const creds = await enableGoProWifi((msg) => this.toast(msg));
       this.toast(`Waiting for "${creds.ssid}" and joining (this can take a few seconds)…`);
@@ -516,6 +517,8 @@ export class UI {
     } catch (e) {
       if (e && (e.name === 'NotFoundError' || e.name === 'AbortError')) return; // user cancelled the chooser
       this.toast(e?.message || 'GoPro Bluetooth setup failed', true);
+    } finally {
+      this._goproBleActive = false;
     }
   }
 
@@ -524,6 +527,7 @@ export class UI {
   _showBlePicker(devices) {
     const list = $('bleList');
     $('bleModal').hidden = false;
+    $('bleGoproNote').hidden = !this._goproBleActive; // pairing note is GoPro-only
     list.innerHTML = '';
     if (!devices.length) { list.innerHTML = '<div class="muted">Scanning…</div>'; return; }
     for (const d of devices) {
@@ -743,7 +747,10 @@ export class UI {
   _renderDeviceMenu() {
     const devices = this._devices || [];
     const n = devices.length;                 // force devices — gate recording/settings
-    const camOn = this.camera.isConnected();
+    // Count the camera as connected only when video is actually live — not merely
+    // when the bridge WebSocket is open (which can happen with auto-connect even
+    // though no GoPro is present, falsely showing "connected" on app open).
+    const camOn = this.camera.isLive();
     const total = n + (camOn ? 1 : 0);
 
     const circle = $('connCircle');
