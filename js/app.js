@@ -432,6 +432,18 @@ function onPowerOff() {
 async function onToggleRecord(fields) {
   if (store.recording) { await stopRecording(); return; }
   if (!connection) return;
+  // Save to a folder by default: if that's on but no folder is chosen yet, ask now —
+  // Start is a user gesture, so the directory picker is allowed. (Cancel → this
+  // recording falls back to browser storage.)
+  if (settings.autoSave && !folderHandle && fs.fsSupported()) {
+    try {
+      folderHandle = await fs.pickFolder();
+      ui.setFolderName(folderHandle.name);
+      await refreshSessions();
+    } catch {
+      ui.toast('No folder chosen — saving to browser storage', true);
+    }
+  }
   if (settings.resetGraphOnRecord) ui.clearLive(); // fresh graph for the new recording
 
   recordingNamed = !!(fields.testId && fields.testId.trim());

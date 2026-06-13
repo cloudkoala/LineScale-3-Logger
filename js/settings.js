@@ -8,7 +8,7 @@ const DEFAULTS = {
   debug: false,               // show the diagnostics panel
   resetGraphOnRecord: true,   // clear the live graph when a recording starts
   autoPauseOnHover: true,     // freeze the live graph while the cursor is over it
-  autoSave: false,            // auto-save each recording (CSV + PNG) to a folder
+  autoSave: true,             // save each recording (CSV + PNG + MP4) to a folder by default
   liveWindowS: 60,            // seconds of history shown on the live graph
   unit: 'kN',                 // global display unit (kN / kgf / lbf) — all devices forced to match
   cameraBridgeUrl: 'ws://localhost:8088', // GoPro bridge WebSocket (gopro-bridge/)
