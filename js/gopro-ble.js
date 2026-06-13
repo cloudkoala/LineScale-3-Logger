@@ -70,6 +70,10 @@ function writeChar(char, bytes) {
 // Connect to a GoPro over BLE, enable its Wi-Fi AP, and return its credentials.
 // onProgress(message) reports each step for UI feedback. Throws on failure
 // (including the user cancelling the device chooser); the error names the step.
+//
+// GoPros tend to drop the link within ~1s of connecting unless they're bonded
+// with this computer, so the connect→enable→read flow is retried a few times and
+// the final error points the user at the camera's pairing mode.
 export async function enableGoProWifi(onProgress = () => {}) {
   if (typeof navigator === 'undefined' || !navigator.bluetooth) {
     throw new Error('Web Bluetooth is not available here.');
@@ -80,10 +84,30 @@ export async function enableGoProWifi(onProgress = () => {}) {
     optionalServices: GOPRO_SERVICES,
   });
 
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try { return await connectAndEnable(device, onProgress); }
+    catch (e) {
+      lastErr = e;
+      if (e?.name === 'NotFoundError' || e?.name === 'AbortError') throw e; // user cancelled
+      if (!/disconnect/i.test(e?.message || '') || attempt === 3) break;     // only retry drops
+      onProgress(`GoPro dropped Bluetooth — retrying (${attempt + 1}/3)…`);
+      try { device.gatt.disconnect(); } catch { /* ignore */ }
+      await delay(900);
+    }
+  }
+  if (/disconnect/i.test(lastErr?.message || '')) {
+    throw new Error(`GoPro kept dropping the Bluetooth link. On the camera, go to Preferences → Connections → Connect Device (Quik App) to put it in pairing mode, then try again. (${lastErr.message})`);
+  }
+  throw lastErr;
+}
+
+// One connect→enable-Wi-Fi→read attempt. Writes as soon as possible after
+// connecting (no settle delay) to beat the camera's drop timer.
+async function connectAndEnable(device, onProgress) {
   onProgress(`Connecting to ${device.name || 'GoPro'} over Bluetooth…`);
   const server = await step('connect', () => device.gatt.connect());
   try {
-    await delay(500); // let service discovery settle before the first GATT op
     const services = await step('discover services', () => getServices(server));
     // The b5f9xxxx characteristics are split across a few GoPro services whose
     // grouping varies by model, so search all of them rather than hard-coding.
