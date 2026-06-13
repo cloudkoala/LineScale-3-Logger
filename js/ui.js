@@ -155,7 +155,6 @@ export class UI {
     $('chooseFolderBtn').onclick = () => this.h.onChooseFolder();
     $('setWindow').onchange = () => this.h.onSetting('liveWindowS', Number($('setWindow').value));
     // Device-state inputs send commands via onDeviceSetting(key, value).
-    $('setRate').onchange = () => this.h.onDeviceSetting('rate', $('setRate').value);
     $('setZeroMode').onchange = () => this.h.onDeviceSetting('zeroMode', $('setZeroMode').value);
     $('setUnit').onchange = () => this.h.onSetting('unit', $('setUnit').value);
     $('powerOffBtn').onclick = () => this.h.onPowerOff();
@@ -852,10 +851,9 @@ export class UI {
     $('recordBtn').disabled = n === 0;
   }
 
-  // Reflect the primary device's live state into the Settings selects (rate +
-  // zero mode). Units are global, so they're not driven from readings here.
+  // Reflect the primary device's live zero mode into the Settings select. Refresh
+  // rate is now a per-device control (each LineScale's gear menu); units are global.
   reflectDeviceState(reading) {
-    if (reading.speedHz === 10 || reading.speedHz === 40) $('setRate').value = String(reading.speedHz);
     if (reading.measureMode === 'N' || reading.measureMode === 'Z')
       $('setZeroMode').value = reading.measureMode === 'N' ? 'abs' : 'rel';
   }
@@ -887,6 +885,11 @@ export class UI {
       refs.max.textContent = fmtSigned(c.max);
       refs.maxUnit.textContent = c.unit || '';
       if (refs.rate) refs.rate.textContent = c.rate ?? '–';
+      // Keep the gear-menu rate select in sync with the live rate (unless the user
+      // is actively changing it).
+      if (refs.rateSel && (c.rate === 10 || c.rate === 40) && document.activeElement !== refs.rateSel) {
+        refs.rateSel.value = String(c.rate);
+      }
       if (refs.batt) refs.batt.textContent = (c.battery ?? '–') + '%';
       if (refs.overload) refs.overload.hidden = !c.overloaded;
     }
@@ -1060,6 +1063,24 @@ export class UI {
         mkMenuItem('Tare', 'Set current value as absolute zero', () => this.h.onChannelCommand(c.id, 'SET_ABS_ZERO')),
         mkMenuItem('Reset', 'Reset max (and clear the device peak)', () => this.h.onChannelReset(c.id)),
       );
+      // Refresh rate is a per-device setting (LineScale only) — each device sets
+      // it independently, so it lives in its own gear menu rather than global Settings.
+      let rateSel = null;
+      if (c.type === 'ls3') {
+        const row = document.createElement('label');
+        row.className = 'dev-menu-rate';
+        row.append(Object.assign(document.createElement('span'), { textContent: 'Refresh rate' }));
+        rateSel = document.createElement('select');
+        rateSel.innerHTML = '<option value="10">10 Hz</option><option value="40">40 Hz</option>';
+        rateSel.value = String(c.rate === 10 || c.rate === 40 ? c.rate : 40);
+        rateSel.onclick = (e) => e.stopPropagation(); // keep the menu open while choosing
+        rateSel.onchange = (e) => {
+          e.stopPropagation();
+          this.h.onChannelCommand(c.id, rateSel.value === '40' ? 'SPEED_40HZ' : 'SPEED_10HZ');
+        };
+        row.append(rateSel);
+        menu.append(row);
+      }
       gearWrap.append(gear, menu);
 
       const close = document.createElement('button');
@@ -1070,6 +1091,7 @@ export class UI {
       ctl.append(gearWrap, close);
       bar.append(ctl);
       wrap.append(bar);
+      if (rateSel) { const e = this._bars.get(c.id); if (e) e.rateSel = rateSel; }
     }
 
     // Big "Connect Device" card only as the initial prompt (no devices yet). Once
