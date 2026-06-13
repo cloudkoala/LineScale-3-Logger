@@ -389,7 +389,9 @@ export class UI {
     // unique times) and align each channel's y onto it (null where it has no
     // sample at that time — uPlot just leaves a gap, which is fine here).
     const single = channels.length < 2;
-    const label = (c, i) => (single ? 'load' : (c.label || `Channel ${i + 1}`));
+    // Use the recorded device name on the chart too (e.g. "LineScale 3 #1"),
+    // falling back to "load" only for legacy single-channel sessions with no label.
+    const label = (c, i) => ((c.label && c.label.trim()) || (single ? 'load' : `Channel ${i + 1}`));
     const color = (i) => (single ? '#3fb6ff' : CHAN_COLORS[i % CHAN_COLORS.length]);
 
     const xset = new Set();

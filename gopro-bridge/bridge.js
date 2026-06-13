@@ -122,20 +122,26 @@ export function startBridge(opts = {}) {
   function goproStart() {
     if (!gopro) { log('GoPro control disabled — expecting an external UDP source'); return; }
     clearInterval(keepAlive);
-    const base = `http://${goproIp}`;
-    const ok = () => { if (!streamSeen) setStatus('ok', 'GoPro stream requested — waiting for video…'); };
-    fetch(`${base}/gopro/camera/stream/start`, { signal: AbortSignal.timeout(4000) })
-      .then((r) => { log(`GoPro stream/start -> ${r.status}`); ok(); })
-      .catch(() => fetch(`${base}/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart`, { signal: AbortSignal.timeout(4000) })
-        .then(() => { log('GoPro legacy gpStream restart sent'); ok(); })
+    // Open GoPro (Hero 9+, incl. Hero 13) serves its HTTP API on :8080; the legacy
+    // gpControl API (Hero 4–8) is on :80. fetch() only rejects on network errors,
+    // NOT on a 404/500 — so check r.ok explicitly, else a wrong-endpoint 404 looks
+    // like success and we'd silently never stream.
+    const open = `http://${goproIp}:8080`;
+    const legacy = `http://${goproIp}`;
+    const ok = (via) => { log(`GoPro stream start via ${via}`); if (!streamSeen) setStatus('ok', 'GoPro stream requested — waiting for video…'); };
+    const ensureOk = (r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r; };
+    fetch(`${open}/gopro/camera/stream/start`, { signal: AbortSignal.timeout(4000) })
+      .then(ensureOk).then(() => ok('Open GoPro :8080'))
+      .catch(() => fetch(`${legacy}/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart`, { signal: AbortSignal.timeout(4000) })
+        .then(ensureOk).then(() => ok('legacy gpControl'))
         .catch((e) => {
-          const msg = `Can't reach the GoPro at ${goproIp} — join its Wi-Fi and enable wireless, then re-add the camera.`;
+          const msg = `Can't reach the GoPro at ${goproIp} — connect to its Wi-Fi, enable wireless, then re-add the camera.`;
           log(`⚠ ${msg} (${e.message})`);
           setStatus('error', msg);
         }));
     // Keep-alive: the preview stops after a few seconds without periodic pings.
     keepAlive = setInterval(() => {
-      fetch(`${base}/gopro/camera/keep_alive`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
+      fetch(`${open}/gopro/camera/keep_alive`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
     }, 2500);
     armNoStreamWatchdog();
   }
