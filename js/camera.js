@@ -65,7 +65,7 @@ export class CameraFeed {
   }
 
   _open() {
-    if (this.video) { this.video.controls = false; }
+    if (this.video) { this.video.controls = true; this.video.autoplay = true; }
     try { this.ws = new WebSocket(this.url); }
     catch (e) { this._status({ state: 'error', message: e.message }); return; }
     this.ws.binaryType = 'arraybuffer';
@@ -119,7 +119,7 @@ export class CameraFeed {
       try {
         this.sb = this.ms.addSourceBuffer(mime);
         this.sb.mode = 'sequence';
-        this.sb.addEventListener('updateend', () => this._flush());
+        this.sb.addEventListener('updateend', () => { this._flush(); this._snapLive(); });
         this.queue = [this.initSeg];
         this._flush();
         this.video.play?.().catch(() => {});
@@ -144,6 +144,19 @@ export class CameraFeed {
     if (!this.sb || this.sb.updating || !this.queue.length) return;
     try { this.sb.appendBuffer(this.queue.shift()); }
     catch (e) { if (e.name === 'QuotaExceededError') this._evict(); }
+  }
+
+  // Keep the live playhead near the newest data: if it drifts more than ~0.5s
+  // behind (after a stall or buffer build-up), jump to the live edge. Only for
+  // the live stream (this.sb), never during saved-clip playback.
+  _snapLive() {
+    if (!this.sb || !this.video || this.video.seeking) return;
+    const b = this.video.buffered;
+    if (!b.length) return;
+    const end = b.end(b.length - 1);
+    if (end - this.video.currentTime > 0.5) {
+      try { this.video.currentTime = Math.max(0, end - 0.05); } catch { /* ignore */ }
+    }
   }
 
   _evict() {
@@ -185,9 +198,10 @@ export class CameraFeed {
     if (!this.video) return;
     this._objUrl && URL.revokeObjectURL(this._objUrl);
     this._objUrl = URL.createObjectURL(blob);
-    this.video.src = this._objUrl;
+    this.video.autoplay = false; // don't auto-play a saved clip — let the user press play
     this.video.muted = false;
     this.video.controls = true;
+    this.video.src = this._objUrl;
   }
 
   clearPlayback() {

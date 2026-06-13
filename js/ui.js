@@ -101,7 +101,6 @@ export class UI {
     // in the top-bar "+" device menu alongside the LineScale/Enforcer options.
     this.camera.attach($('cameraVideo'));
     this.camera.onStatus((s) => this._onCameraStatus(s));
-    $('cameraMute').onclick = () => { const v = $('cameraVideo'); v.muted = !v.muted; this._updateMuteLabel(); };
     $('setCameraUrl').onchange = () => this.h.onSetting('cameraBridgeUrl', ($('setCameraUrl').value || '').trim());
     $('setCameraAuto').onchange = () => this.h.onSetting('cameraAutoConnect', $('setCameraAuto').checked);
 
@@ -135,6 +134,10 @@ export class UI {
 
     this._buildChart();
     window.addEventListener('resize', () => this._resizeChart());
+    // Re-fit the chart whenever its container changes width (e.g. the camera
+    // video appearing/loading beside it shrinks the plot) so uPlot's canvas
+    // never overflows over the video.
+    if (window.ResizeObserver) new ResizeObserver(() => this._fitChartSoon()).observe($('chart'));
   }
 
   // Reflect persisted preferences into the controls at startup.
@@ -403,15 +406,13 @@ export class UI {
   }
 
   _onCameraStatus(s) {
-    if (s.state === 'live') { $('chartCam').hidden = false; this._updateMuteLabel(); this._fitChartSoon(); }
+    if (s.state === 'live') { $('chartCam').hidden = false; this._fitChartSoon(); }
     else if ((s.state === 'disconnected' || s.state === 'error') && this.viewMode !== 'session') {
       $('chartCam').hidden = true; this._fitChartSoon();
     }
     if (s.state === 'error') this.toast(s.message || 'Camera bridge not reachable', true);
     this._renderDeviceMenu(); // reflect connect/disconnect in the "+" menu
   }
-
-  _updateMuteLabel() { $('cameraMute').textContent = $('cameraVideo').muted ? '🔇' : '🔊'; }
 
   connectCamera() { this._toggleCamera(true); }
 
@@ -424,7 +425,6 @@ export class UI {
   playSessionVideo(blob) {
     this.camera.showBlob(blob);
     $('chartCam').hidden = false;
-    this._updateMuteLabel();
     this._renderDeviceMenu();
     this._fitChartSoon();
   }
