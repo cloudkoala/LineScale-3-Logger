@@ -18,6 +18,28 @@ import { spawn } from 'node:child_process';
 import { WebSocketServer } from 'ws';
 import { fileURLToPath } from 'node:url';
 import { realpathSync } from 'node:fs';
+import os from 'node:os';
+
+// When a GoPro is plugged in over USB it appears as a USB-ethernet interface on
+// the GoPro subnet 172.2X.1YZ.0/24 (X,Y,Z from the camera serial); the camera
+// itself is host .51. Given this machine's IPv4 addresses, derive the camera's
+// USB IP (or null). Pure + exported for tests. Avoids needing the serial number.
+export function usbGoProIp(addresses) {
+  for (const addr of addresses || []) {
+    if (/^172\.2\d\.1\d\d\.\d+$/.test(addr)) return addr.replace(/\.\d+$/, '.51');
+  }
+  return null;
+}
+function findUsbGoProIp() {
+  const out = [];
+  const ifaces = os.networkInterfaces();
+  for (const name of Object.keys(ifaces)) {
+    for (const a of ifaces[name] || []) {
+      if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+    }
+  }
+  return usbGoProIp(out);
+}
 
 // ---- fMP4 box splitter: separates the init segment (ftyp+moov) from media fragments -----
 // (moof+mdat). Each fragment begins on a keyframe (ffmpeg frag_keyframe) so the app can
@@ -128,30 +150,50 @@ export function startBridge(opts = {}) {
 
   // GoPro control (best-effort; failures are non-fatal so dev/test still works).
   // Safe to call again (e.g. when a viewer connects) — it clears any prior keep-alive.
-  function goproStart() {
+  // Tries a USB-tethered camera first (if one's plugged in), then the Wi-Fi AP, then
+  // the legacy gpControl API. Whichever responds becomes the keep-alive target.
+  // Open GoPro (Hero 9+) serves HTTP on :8080; legacy (Hero 4–8) on :80. fetch()
+  // only rejects on network errors, NOT on a 404/500 — so check r.ok explicitly,
+  // else a wrong-endpoint 404 looks like success and we'd silently never stream.
+  async function goproStart() {
     if (!gopro) { log('GoPro control disabled — expecting an external UDP source'); return; }
     clearInterval(keepAlive);
-    // Open GoPro (Hero 9+, incl. Hero 13) serves its HTTP API on :8080; the legacy
-    // gpControl API (Hero 4–8) is on :80. fetch() only rejects on network errors,
-    // NOT on a 404/500 — so check r.ok explicitly, else a wrong-endpoint 404 looks
-    // like success and we'd silently never stream.
-    const open = `http://${goproIp}:8080`;
-    const legacy = `http://${goproIp}`;
-    const ok = (via) => { log(`GoPro stream start via ${via}`); if (!streamSeen) setStatus('ok', 'GoPro stream requested — waiting for video…'); };
     const ensureOk = (r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r; };
-    fetch(`${open}/gopro/camera/stream/start`, { signal: AbortSignal.timeout(4000) })
-      .then(ensureOk).then(() => ok('Open GoPro :8080'))
-      .catch(() => fetch(`${legacy}/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart`, { signal: AbortSignal.timeout(4000) })
-        .then(ensureOk).then(() => ok('legacy gpControl'))
-        .catch((e) => {
-          const msg = `Can't reach the GoPro at ${goproIp} — connect to its Wi-Fi, enable wireless, then re-add the camera.`;
-          log(`⚠ ${msg} (${e.message})`);
-          setStatus('error', msg);
-        }));
-    // Keep-alive: the preview stops after a few seconds without periodic pings.
-    keepAlive = setInterval(() => {
-      fetch(`${open}/gopro/camera/keep_alive`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
-    }, 2500);
+    const get = (url) => fetch(url, { signal: AbortSignal.timeout(4000) }).then(ensureOk);
+
+    const usbIp = findUsbGoProIp();
+    // Priority order: USB (most reliable) → Wi-Fi AP → legacy gpControl.
+    const candidates = [];
+    if (usbIp) candidates.push({ base: `http://${usbIp}:8080`, wired: true, label: `USB ${usbIp}` });
+    candidates.push({ base: `http://${goproIp}:8080`, wired: false, label: `Wi-Fi ${goproIp}` });
+
+    let chosen = null;
+    for (const c of candidates) {
+      try {
+        if (c.wired) await get(`${c.base}/gopro/camera/control/wired_usb?p=1`); // enable wired control
+        await get(`${c.base}/gopro/camera/stream/start`);
+        chosen = c; break;
+      } catch (e) { log(`GoPro ${c.label} not available (${e.message})`); }
+    }
+    if (!chosen) {
+      try {
+        await get(`http://${goproIp}/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart`);
+        chosen = { base: `http://${goproIp}`, label: 'legacy gpControl' };
+      } catch { /* fall through to error */ }
+    }
+
+    if (chosen) {
+      log(`GoPro stream start via ${chosen.label}`);
+      if (!streamSeen) setStatus('ok', `GoPro stream requested (${chosen.label}) — waiting for video…`);
+      // Keep-alive: the preview stops after a few seconds without periodic pings.
+      keepAlive = setInterval(() => {
+        fetch(`${chosen.base}/gopro/camera/keep_alive`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
+      }, 2500);
+    } else {
+      const msg = `Can't reach the GoPro — plug it in via USB, or join its Wi-Fi and enable wireless, then re-add the camera.`;
+      log(`⚠ ${msg}`);
+      setStatus('error', msg);
+    }
     armNoStreamWatchdog();
   }
 
