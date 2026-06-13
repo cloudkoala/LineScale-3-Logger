@@ -12,6 +12,18 @@ const CHAN_COLORS = ['#3fb6ff', '#ffb020', '#2ec36a', '#ff5252', '#b06fff', '#ff
 // Display helper: material is a list; join for single-line display.
 const matStr = (m) => (Array.isArray(m) ? m.join(', ') : (m || ''));
 
+// Value of a session channel at time tMs (nearest sample at or before t).
+// ch = { times: number[] (sorted ms), values: number[] }.
+function valueAt(ch, tMs) {
+  const t = ch.times;
+  if (!t.length) return 0;
+  if (tMs <= t[0]) return ch.values[0];
+  if (tMs >= t[t.length - 1]) return ch.values[t.length - 1];
+  let lo = 0, hi = t.length - 1;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (t[mid] <= tMs) lo = mid; else hi = mid - 1; }
+  return ch.values[lo];
+}
+
 // Format a readout value with a fixed-width sign slot so the layout never
 // reflows when a value goes negative: U+2212 minus for negatives, U+2007 figure
 // space (digit width) otherwise. Relies on tabular-nums on the value.
@@ -102,6 +114,11 @@ export class UI {
     // in the top-bar "+" device menu alongside the LineScale/Enforcer options.
     this.camera.attach($('cameraVideo'));
     this.camera.onStatus((s) => this._onCameraStatus(s));
+    // Video drives the session cursor + panels while playing (unless the mouse is
+    // over the chart, in which case the graph is the master and scrubs the video).
+    $('cameraVideo').addEventListener('timeupdate', () => {
+      if (this.viewMode === 'session' && !this._overChart) this._setSessionTime($('cameraVideo').currentTime, true);
+    });
     $('setCameraUrl').onchange = () => this.h.onSetting('cameraBridgeUrl', ($('setCameraUrl').value || '').trim());
     $('setCameraAuto').onchange = () => this.h.onSetting('cameraAutoConnect', $('setCameraAuto').checked);
 
@@ -237,9 +254,13 @@ export class UI {
     // Auto-pause: freeze the live graph while the cursor is over it so the
     // trace doesn't scroll out from under the pointer.
     this.chart.over.addEventListener('mouseenter', () => {
+      this._overChart = true;
       if (this.autoPause && this.viewMode === 'live') { this.hoverPaused = true; this._setPauseBadge(true); }
+      // In a session, hovering takes over scrubbing — pause any video playback.
+      if (this.viewMode === 'session') { const v = $('cameraVideo'); if (v && !v.paused) v.pause(); }
     });
     this.chart.over.addEventListener('mouseleave', () => {
+      this._overChart = false;
       if (this.hoverPaused) {
         this.hoverPaused = false;
         this._setPauseBadge(false);
@@ -285,14 +306,22 @@ export class UI {
         },
         setCursor: (u) => {
           const idx = u.cursor.idx;
-          if (idx == null) { tip.style.display = 'none'; return; }
-          const xVal = u.data[0][idx];
-          const yVal = u.data[1][idx];
-          if (xVal == null || yVal == null) { tip.style.display = 'none'; return; }
-          tip.style.display = 'block';
-          tip.textContent = `${yVal.toFixed(2)} ${self.unit} · ${xVal.toFixed(1)} s`;
-          tip.style.left = u.valToPos(xVal, 'x') + 'px';
-          tip.style.top = u.valToPos(yVal, 'y') + 'px';
+          const xVal = idx == null ? null : u.data[0][idx];
+          const yVal = idx == null ? null : u.data[1][idx];
+          // Floating readout (rides the primary line).
+          if (xVal == null || yVal == null) { tip.style.display = 'none'; }
+          else {
+            tip.style.display = 'block';
+            tip.textContent = `${yVal.toFixed(2)} ${self.unit} · ${xVal.toFixed(1)} s`;
+            tip.style.left = u.valToPos(xVal, 'x') + 'px';
+            tip.style.top = u.valToPos(yVal, 'y') + 'px';
+          }
+          // Session scrub: when the user moves the cursor over a saved session,
+          // drive the device panels + video from the cursor time (xVal). Skipped
+          // for programmatic cursor moves (video-driven) to avoid a feedback loop.
+          if (self.viewMode === 'session' && self._overChart && !self._cursorProgrammatic && xVal != null) {
+            self._setSessionTime(xVal, false);
+          }
         },
       },
     };
@@ -378,6 +407,19 @@ export class UI {
     });
     if (data.length === 1) data.push([0]); // no channels: keep a placeholder series
     this._buildChart(series, data);
+
+    // Precompute the session's channels for the scrubbable device panels: per
+    // channel a sorted times[]/values[] (for valueAt) + the fixed peak (MAX).
+    this._sessionChannels = channels.map((c, i) => {
+      const times = c.samples.map((s) => s.t);
+      const values = c.samples.map((s) => s.value);
+      const peak = Number.isFinite(c.max) && c.max ? c.max : (values.length ? Math.max(...values) : 0);
+      const nm = (c.label && c.label.trim()) || (single ? 'Load' : `Channel ${i + 1}`);
+      return { label: nm, color: color(i), unit: c.unit || this.unit, times, values, peak };
+    });
+    this._barSig = null;          // force a rebuild into session panels
+    this._renderSessionPanels(0); // initial position at t=0
+
     this._renderHeader({ id: rec.name, config: rec.config, material: matStr(rec.material) });
     $('liveBtn').hidden = false;
     // In a saved session, only Back-to-Live + Export apply.
@@ -392,6 +434,7 @@ export class UI {
   showLive() {
     this.viewMode = 'live';
     this.sessionName = null;
+    this._sessionChannels = null; // leave session-scrubbing mode
     this._renderHeader(this.liveHeader);
     $('liveBtn').hidden = true;
     $('pauseBtn').hidden = false;
@@ -714,13 +757,19 @@ export class UI {
   // otherwise we just update the live value text. Rebuilding every frame would
   // recreate the controls mid-click and they'd never fire.
   // chans: [{ id, label, color, kind, current, max, unit, rate, battery, overloaded }].
+  // Public entry (live devices, from app.js). In session view the panels are
+  // driven from the session instead, so live readings must not clobber them.
   renderChannels(chans) {
-    // The bars always include the add-device bar; its text depends on whether
-    // any device is connected, so the signature includes the count.
+    if (this.viewMode === 'session') return;
+    this._renderBars(chans);
+  }
+
+  // Render/update the device bars (used for both live devices and session panels).
+  _renderBars(chans) {
+    // Rebuild the DOM only when the channel set or labels change; otherwise just
+    // update values so controls stay clickable across ~40 Hz updates.
     const sig = chans.length + '#' + chans.map((c) => `${c.id}:${c.label}`).join('|');
     if (sig !== this._barSig) { this._buildDeviceBars(chans); this._barSig = sig; }
-    // Update live values (current/max/rate/battery/unit) without touching the
-    // structure so the controls stay clickable across ~40 Hz updates.
     for (const c of chans) {
       const refs = this._bars && this._bars.get(c.id);
       if (!refs) continue;
@@ -728,10 +777,44 @@ export class UI {
       refs.curUnit.textContent = c.unit || '';
       refs.max.textContent = fmtSigned(c.max);
       refs.maxUnit.textContent = c.unit || '';
-      refs.rate.textContent = c.rate ?? '–';
+      if (refs.rate) refs.rate.textContent = c.rate ?? '–';
       if (refs.batt) refs.batt.textContent = (c.battery ?? '–') + '%';
-      refs.overload.hidden = !c.overloaded;
+      if (refs.overload) refs.overload.hidden = !c.overloaded;
     }
+  }
+
+  // Render the session's device panels with CURRENT at time tMs (MAX = peak).
+  _renderSessionPanels(tMs) {
+    if (!this._sessionChannels) return;
+    this._renderBars(this._sessionChannels.map((ch, i) => ({
+      id: 's' + i, type: 'session', label: ch.label, color: ch.color,
+      unit: ch.unit, current: valueAt(ch, tMs), max: ch.peak,
+    })));
+  }
+
+  // ---- session scrubbing time hub ---------------------------------------
+  // Move to time tSec in the session. From the graph (fromVideo=false): update
+  // panels + scrub the video to match. From the video (fromVideo=true): update
+  // panels + move the graph cursor to match.
+  _setSessionTime(tSec, fromVideo) {
+    this._renderSessionPanels(tSec * 1000);
+    if (fromVideo) {
+      this._seekCursorTo(tSec);
+    } else {
+      const v = $('cameraVideo');
+      if (v && v.src && !$('chartCam').hidden) {
+        if (!v.paused) v.pause();                 // hover takes over playback
+        if (Math.abs(v.currentTime - tSec) > 0.04) { try { v.currentTime = tSec; } catch { /* ignore */ } }
+      }
+    }
+  }
+
+  // Position the chart cursor at time tSec without retriggering the scrub logic.
+  _seekCursorTo(tSec) {
+    if (!this.chart) return;
+    this._cursorProgrammatic = true;
+    try { this.chart.setCursor({ left: this.chart.valToPos(tSec, 'x') }); } catch { /* ignore */ }
+    this._cursorProgrammatic = false;
   }
 
   _buildDeviceBars(chans) {
@@ -740,6 +823,8 @@ export class UI {
     this._bars = new Map();
 
     for (const c of chans) {
+      // Session panels are read-only history (no live controls, no rate/battery).
+      const isSession = c.type === 'session';
       const bar = document.createElement('div');
       bar.className = 'device-bar';
 
@@ -750,20 +835,21 @@ export class UI {
       sw.type = 'color';
       sw.className = 'dev-swatch';
       sw.value = c.color;
-      sw.title = 'Line color';
-      sw.oninput = () => this.h.onChannelColor(c.id, sw.value);
+      if (isSession) { sw.disabled = true; }
+      else { sw.title = 'Line color'; sw.oninput = () => this.h.onChannelColor(c.id, sw.value); }
       const idText = document.createElement('div');
       idText.className = 'dev-idtext';
       // Editable name as a contenteditable div so a long name can wrap to two
       // lines (an <input> can't), freeing horizontal room for the readouts.
       const label = document.createElement('div');
       label.className = 'dev-name';
-      label.contentEditable = 'true';
-      label.spellcheck = false;
+      if (!isSession) { label.contentEditable = 'true'; label.spellcheck = false; }
       label.textContent = c.label;
-      label.title = 'Rename device';
-      label.onblur = () => this.h.onChannelLabel(c.id, label.textContent.trim() || c.label);
-      label.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); label.blur(); } };
+      if (!isSession) {
+        label.title = 'Rename device';
+        label.onblur = () => this.h.onChannelLabel(c.id, label.textContent.trim() || c.label);
+        label.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); label.blur(); } };
+      }
       const kind = document.createElement('div');
       kind.className = 'dev-kind';
       kind.textContent = c.kind || '';
@@ -793,28 +879,37 @@ export class UI {
       const maxUnit = document.createElement('span'); maxUnit.className = 'unit';
       maxRO.val.append(max, maxUnit);
 
-      // Rate (+ Battery, when the device reports it) stacked vertically.
-      const meta = document.createElement('div');
-      meta.className = 'dev-ro-meta';
-      const rateRO = mkRO('dev-ro-rate', 'Rate');
-      const rate = document.createElement('span'); rate.className = 'dev-rate-num';
-      rateRO.val.append(rate, document.createTextNode(' Hz'));
-      meta.append(rateRO.box);
-
-      // The Enforcer has no battery telemetry — omit that readout for it.
-      const hasBattery = !String(c.type || '').startsWith('enforcer');
-      let batt = null;
-      if (hasBattery) {
-        const battRO = mkRO('dev-ro-batt', 'Battery');
-        batt = document.createElement('span'); batt.className = 'dev-batt-num';
-        battRO.val.append(batt);
-        meta.append(battRO.box);
+      // Rate (+ Battery, when the device reports it) stacked vertically. Session
+      // panels are historical, so they have no rate/battery meta column.
+      let rate = null, batt = null, meta = null;
+      if (!isSession) {
+        meta = document.createElement('div');
+        meta.className = 'dev-ro-meta';
+        const rateRO = mkRO('dev-ro-rate', 'Rate');
+        rate = document.createElement('span'); rate.className = 'dev-rate-num';
+        rateRO.val.append(rate, document.createTextNode(' Hz'));
+        meta.append(rateRO.box);
+        // The Enforcer has no battery telemetry — omit that readout for it.
+        if (!String(c.type || '').startsWith('enforcer')) {
+          const battRO = mkRO('dev-ro-batt', 'Battery');
+          batt = document.createElement('span'); batt.className = 'dev-batt-num';
+          battRO.val.append(batt);
+          meta.append(battRO.box);
+        }
       }
 
       // Thin partial divider between adjacent sections. The one before the
       // rate/battery column is tagged so it hides together with that column.
       const mkDiv = (extra) => { const d = document.createElement('div'); d.className = 'dev-divider' + (extra ? ' ' + extra : ''); return d; };
-      readouts.append(curRO.box, mkDiv(), maxRO.box, mkDiv('dev-div-meta'), meta);
+      if (meta) readouts.append(curRO.box, mkDiv(), maxRO.box, mkDiv('dev-div-meta'), meta);
+      else readouts.append(curRO.box, mkDiv(), maxRO.box);
+
+      bar.append(ident, mkDiv(), readouts);
+      this._bars.set(c.id, { cur, curUnit, max, maxUnit, rate, batt, overload });
+
+      // Session panels are read-only — no controls. Live devices get the gear
+      // menu (Zero / Tare / Reset) + disconnect ×.
+      if (isSession) { wrap.append(bar); continue; }
 
       // Controls: settings gear (Zero / Tare / Reset menu) + disconnect ×.
       const ctl = document.createElement('div');
@@ -855,10 +950,8 @@ export class UI {
       close.title = 'Disconnect this device';
       close.onclick = () => this.h.onChannelDisconnect(c.id);
       ctl.append(gearWrap, close);
-
-      bar.append(ident, mkDiv(), readouts, ctl);
+      bar.append(ctl);
       wrap.append(bar);
-      this._bars.set(c.id, { cur, curUnit, max, maxUnit, rate, batt, overload });
     }
 
     // Big "Connect Device" card only as the initial prompt (no devices yet). Once

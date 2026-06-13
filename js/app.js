@@ -625,7 +625,7 @@ async function reconnectFolder() {
 
 async function onSelectSession(id) {
   activeSessionId = id;
-  if (id === null) { await refreshSessions(); return; }
+  if (id === null) { refreshDeviceUI(); await refreshSessions(); return; } // restore live device bars
   const rec = await getSessionActive(id);
   if (rec) {
     // Attach the recorded clip (folder mode) so the UI can play it back.
