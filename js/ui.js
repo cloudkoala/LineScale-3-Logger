@@ -69,6 +69,8 @@ export class UI {
     this.camera = new CameraFeed(); // GoPro/webcam live feed + recording
     this._cameraUrl = 'ws://localhost:8088';
     this._cameraWanted = false; // user has the live feed turned on
+    this._cameraSilent = false; // current connect is best-effort (auto-connect): suppress errors
+    this._cameraGiveUp = null;  // give-up timer for a silent connect that never goes live
   }
 
   init() {
@@ -184,7 +186,7 @@ export class UI {
     $('setCameraAuto').checked = !!s.cameraAutoConnect;
     this._videoOffsetMs = Number(s.videoOffsetMs) || 0;
     $('setVideoOffset').value = String(this._videoOffsetMs);
-    if (s.cameraAutoConnect) this._toggleCamera(true);
+    if (s.cameraAutoConnect) this._toggleCamera(true, { silent: true });
     this.setRecordField('testId', s.testId || '');
     this.setRecordField('sample', s.sample || '01');
     this.setRecordField('config', s.config || '');
@@ -461,24 +463,40 @@ export class UI {
   }
 
   // ---- camera feed -------------------------------------------------------
-  _toggleCamera(forceOn) {
-    if (!forceOn && this.camera.isConnected()) { this._cameraWanted = false; this.camera.disconnect(); }
-    else { this._cameraWanted = true; this.camera.connect(this._cameraUrl); }
+  // silent: best-effort auto-connect — suppress "can't reach" toasts and give up
+  // quietly (so the bridge goes idle) if no video arrives. Explicit user connects
+  // are not silent: they report errors and keep retrying.
+  _toggleCamera(forceOn, { silent = false } = {}) {
+    clearTimeout(this._cameraGiveUp);
+    if (!forceOn && this.camera.isConnected()) {
+      this._cameraWanted = false; this._cameraSilent = false;
+      this.camera.disconnect();
+    } else {
+      this._cameraWanted = true; this._cameraSilent = silent;
+      this.camera.connect(this._cameraUrl);
+      if (silent) {
+        this._cameraGiveUp = setTimeout(() => {
+          if (!this.camera.isLive()) { this._cameraWanted = false; this.camera.disconnect(); }
+        }, 12000);
+      }
+    }
   }
 
   _onCameraStatus(s) {
     // Diagnostics relayed from the bridge (e.g. "can't reach the GoPro") — surface
     // them so a blank feed isn't a silent mystery. Doesn't change connection state.
     if (s.state === 'bridge') {
-      if (s.level === 'error' || s.level === 'warn') this.toast(s.message, true);
+      if (!this._cameraSilent && (s.level === 'error' || s.level === 'warn')) this.toast(s.message, true);
       return;
     }
-    if (s.state === 'lost') this.toast(s.message || 'GoPro feed lost', true); // disconnect() fires next to clean up
-    if (s.state === 'live') { $('chartCam').hidden = false; this._fitChartSoon(); }
-    else if ((s.state === 'disconnected' || s.state === 'error' || s.state === 'lost') && this.viewMode !== 'session') {
+    if (s.state === 'lost' && !this._cameraSilent) this.toast(s.message || 'GoPro feed lost', true); // disconnect() fires next to clean up
+    if (s.state === 'live') {
+      clearTimeout(this._cameraGiveUp); this._cameraSilent = false; // it connected — treat normally from now on
+      $('chartCam').hidden = false; this._fitChartSoon();
+    } else if ((s.state === 'disconnected' || s.state === 'error' || s.state === 'lost') && this.viewMode !== 'session') {
       $('chartCam').hidden = true; this._fitChartSoon();
     }
-    if (s.state === 'error') this.toast(s.message || 'Camera bridge not reachable', true);
+    if (s.state === 'error' && !this._cameraSilent) this.toast(s.message || 'Camera bridge not reachable', true);
     this._renderDeviceMenu(); // reflect connect/disconnect in the "+" menu
   }
 
