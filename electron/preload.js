@@ -8,4 +8,6 @@ contextBridge.exposeInMainWorld('dynoNative', {
   onBleDevices: (cb) => ipcRenderer.on('ble-devices', (_e, devices) => cb(devices)),
   selectBle: (deviceId) => ipcRenderer.send('ble-select', deviceId),
   cancelBle: () => ipcRenderer.send('ble-cancel'),
+  // Join a Wi-Fi network (the GoPro AP). Returns { ok, message }.
+  joinWifi: (creds) => ipcRenderer.invoke('join-wifi', creds),
 });

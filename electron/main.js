@@ -14,6 +14,7 @@ const http = require('node:http');
 const { readFile } = require('node:fs/promises');
 const path = require('node:path');
 const ffmpegStatic = require('ffmpeg-static');
+const { joinWifi } = require('./wifi');
 
 const ROOT = path.join(__dirname, '..'); // repo root = the renderer files
 // Fixed port → stable origin (http://127.0.0.1:PORT) so localStorage/IndexedDB
@@ -81,6 +82,9 @@ function createWindow(port) {
 
 ipcMain.on('ble-select', (_e, deviceId) => { if (bleCallback) { bleCallback(deviceId || ''); bleCallback = null; } });
 ipcMain.on('ble-cancel', () => { if (bleCallback) { bleCallback(''); bleCallback = null; } });
+
+// Join the GoPro's Wi-Fi AP (SSID/password obtained over BLE in the renderer).
+ipcMain.handle('join-wifi', async (_e, creds) => joinWifi(creds));
 
 // Single instance only — a second instance would clash on the fixed ports (and split
 // storage). Focus the existing window instead.
