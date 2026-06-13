@@ -92,20 +92,52 @@ export function startBridge(opts = {}) {
   let keepAlive = null;
   let initSeg = null;
   let codec = 'avc1.42E01E';
+  let streamSeen = false;       // have we ever produced an init segment (real video flowing)?
+  let noStreamTimer = null;
+  let lastStatus = null;        // latest diagnostic, replayed to each new client
+
+  // Push a diagnostic to every connected client, and remember it so a client
+  // that connects later still learns the current state (set before any client
+  // connects). The app surfaces these so a blank feed isn't a silent mystery.
+  function setStatus(level, message) {
+    if (lastStatus && lastStatus.level === level && lastStatus.message === message) return; // unchanged — don't re-toast
+    lastStatus = { type: 'status', level, message };
+    const s = JSON.stringify(lastStatus);
+    for (const ws of wss.clients) if (ws.readyState === 1) ws.send(s);
+  }
+
+  // If no video has arrived a few seconds after asking the GoPro to stream, tell
+  // the user (covers an unreachable camera or one that's on but not streaming).
+  function armNoStreamWatchdog() {
+    clearTimeout(noStreamTimer);
+    noStreamTimer = setTimeout(() => {
+      if (!streamSeen && lastStatus?.level !== 'error') {
+        setStatus('warn', `No video from the GoPro yet. Make sure it's on its Wi-Fi with wireless enabled, then remove and re-add the camera.`);
+      }
+    }, 8000);
+  }
 
   // GoPro control (best-effort; failures are non-fatal so dev/test still works).
+  // Safe to call again (e.g. when a viewer connects) — it clears any prior keep-alive.
   function goproStart() {
     if (!gopro) { log('GoPro control disabled — expecting an external UDP source'); return; }
+    clearInterval(keepAlive);
     const base = `http://${goproIp}`;
+    const ok = () => { if (!streamSeen) setStatus('ok', 'GoPro stream requested — waiting for video…'); };
     fetch(`${base}/gopro/camera/stream/start`, { signal: AbortSignal.timeout(4000) })
-      .then((r) => log(`GoPro stream/start -> ${r.status}`))
+      .then((r) => { log(`GoPro stream/start -> ${r.status}`); ok(); })
       .catch(() => fetch(`${base}/gp/gpControl/execute?p1=gpStream&a1=proto_v2&c1=restart`, { signal: AbortSignal.timeout(4000) })
-        .then(() => log('GoPro legacy gpStream restart sent'))
-        .catch((e) => log(`⚠ could not reach the GoPro at ${goproIp} (${e.message}). Join its Wi-Fi and enable wireless.`)));
+        .then(() => { log('GoPro legacy gpStream restart sent'); ok(); })
+        .catch((e) => {
+          const msg = `Can't reach the GoPro at ${goproIp} — join its Wi-Fi and enable wireless, then re-add the camera.`;
+          log(`⚠ ${msg} (${e.message})`);
+          setStatus('error', msg);
+        }));
     // Keep-alive: the preview stops after a few seconds without periodic pings.
     keepAlive = setInterval(() => {
       fetch(`${base}/gopro/camera/keep_alive`, { signal: AbortSignal.timeout(2000) }).catch(() => {});
     }, 2500);
+    armNoStreamWatchdog();
   }
 
   // ffmpeg: UDP MPEG-TS -> fMP4 on stdout.
@@ -156,7 +188,11 @@ export function startBridge(opts = {}) {
   wss.on('connection', (ws) => {
     log(`client connected (${wss.clients.size} total)`);
     ws.send(JSON.stringify({ type: 'hello', codec }));
+    if (lastStatus) ws.send(JSON.stringify(lastStatus));
     if (initSeg) ws.send(tagged(0, initSeg));
+    // A viewer is here but no video is flowing yet — (re)ask the GoPro to stream.
+    // The one-shot start at launch often runs before the GoPro Wi-Fi is joined.
+    else if (gopro && !streamSeen) goproStart();
     ws.on('close', () => log(`client disconnected (${wss.clients.size} total)`));
     ws.on('error', () => {});
   });
@@ -164,6 +200,9 @@ export function startBridge(opts = {}) {
   const onInit = (init) => {
     initSeg = init;
     codec = codecFromInit(init);
+    streamSeen = true;
+    clearTimeout(noStreamTimer);
+    if (lastStatus?.level !== 'live') setStatus('live', 'Live video streaming.');
     log(`init segment ready (${init.length} B), codec ${codec}`);
     for (const ws of wss.clients) {
       if (ws.readyState !== 1) continue;
@@ -184,6 +223,7 @@ export function startBridge(opts = {}) {
     stop() {
       stopped = true;
       clearInterval(keepAlive);
+      clearTimeout(noStreamTimer);
       try { ff && ff.kill('SIGKILL'); } catch { /* ignore */ }
       try { wss.close(); } catch { /* ignore */ }
     },

@@ -456,6 +456,12 @@ export class UI {
   }
 
   _onCameraStatus(s) {
+    // Diagnostics relayed from the bridge (e.g. "can't reach the GoPro") — surface
+    // them so a blank feed isn't a silent mystery. Doesn't change connection state.
+    if (s.state === 'bridge') {
+      if (s.level === 'error' || s.level === 'warn') this.toast(s.message, true);
+      return;
+    }
     if (s.state === 'live') { $('chartCam').hidden = false; this._fitChartSoon(); }
     else if ((s.state === 'disconnected' || s.state === 'error') && this.viewMode !== 'session') {
       $('chartCam').hidden = true; this._fitChartSoon();

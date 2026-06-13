@@ -91,7 +91,11 @@ export class CameraFeed {
 
   _onMessage(ev) {
     if (typeof ev.data === 'string') {
-      try { const m = JSON.parse(ev.data); if (m.type === 'hello') this.codec = m.codec; } catch {}
+      try {
+        const m = JSON.parse(ev.data);
+        if (m.type === 'hello') this.codec = m.codec;
+        else if (m.type === 'status') this._status({ state: 'bridge', level: m.level, message: m.message });
+      } catch {}
       return;
     }
     const bytes = new Uint8Array(ev.data);
