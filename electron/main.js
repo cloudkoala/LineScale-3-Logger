@@ -16,6 +16,10 @@ const path = require('node:path');
 const ffmpegStatic = require('ffmpeg-static');
 
 const ROOT = path.join(__dirname, '..'); // repo root = the renderer files
+// Fixed port → stable origin (http://127.0.0.1:PORT) so localStorage/IndexedDB
+// (settings, saved folder handle, sessions) persist across launches. A random
+// port would change the origin every launch and lose all of it.
+const PORT = 8123;
 const MIME = {
   '.html': 'text/html', '.js': 'text/javascript', '.mjs': 'text/javascript',
   '.css': 'text/css', '.json': 'application/json', '.png': 'image/png',
@@ -44,7 +48,7 @@ function startStaticServer() {
       }
     });
     server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+    server.listen(PORT, '127.0.0.1', () => resolve(PORT));
   });
 }
 
@@ -62,10 +66,10 @@ function createWindow(port) {
   });
   win.loadURL(`http://127.0.0.1:${port}/`);
 
-  // Web Bluetooth: Electron fires this (repeatedly, as devices are discovered) and
+  // Web Bluetooth: webContents fires this (repeatedly, as devices are discovered) and
   // expects us to choose. Forward the list to the renderer's picker; it calls back
   // with a deviceId (or '' to cancel) via IPC.
-  win.webContents.session.on('select-bluetooth-device', (event, devices, callback) => {
+  win.webContents.on('select-bluetooth-device', (event, devices, callback) => {
     event.preventDefault();
     bleCallback = callback;
     win.webContents.send('ble-devices', devices.map((d) => ({
@@ -78,15 +82,23 @@ function createWindow(port) {
 ipcMain.on('ble-select', (_e, deviceId) => { if (bleCallback) { bleCallback(deviceId || ''); bleCallback = null; } });
 ipcMain.on('ble-cancel', () => { if (bleCallback) { bleCallback(''); bleCallback = null; } });
 
-app.whenReady().then(async () => {
-  const { startBridge } = await import('../gopro-bridge/bridge.js');
-  const port = await startStaticServer();
-  // Embedded GoPro bridge with bundled ffmpeg; serves ws://localhost:8088 like the CLI,
-  // so js/camera.js connects to it unchanged.
-  bridge = startBridge({ ffmpegPath: ffmpegStatic });
-  createWindow(port);
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(port); });
-});
+// Single instance only — a second instance would clash on the fixed ports (and split
+// storage). Focus the existing window instead.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+
+  app.whenReady().then(async () => {
+    const { startBridge } = await import('../gopro-bridge/bridge.js');
+    const port = await startStaticServer();
+    // Embedded GoPro bridge with bundled ffmpeg; serves ws://localhost:8088 like the CLI,
+    // so js/camera.js connects to it unchanged.
+    bridge = startBridge({ ffmpegPath: ffmpegStatic });
+    createWindow(port);
+    app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(port); });
+  });
+}
 
 app.on('window-all-closed', () => app.quit());
 app.on('quit', () => {
